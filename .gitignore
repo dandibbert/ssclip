@@ -1,0 +1,19 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Xcode user and build state
+DerivedData/
+xcuserdata/
+*.xcuserstate
+
+# Local app builds
+dist/
+
+# macOS metadata
+.DS_Store
+
+# Local tools and private design material
+.omc/
+mockups/
+docs/superpowers/
