@@ -94,6 +94,32 @@ struct ClipboardStoreTests {
         #expect(captures.first?.title == fileURL.lastPathComponent)
     }
 
+    @Test func delayedTextInSameGenerationIsRetriedAndCaptured() async throws {
+        let suiteName = "SSClipTests-delayed-text-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { UserDefaults.standard.removePersistentDomain(forName: suiteName) }
+        let pasteboard = NSPasteboard(name: .init(suiteName))
+        defer { pasteboard.releaseGlobally() }
+        var generation = 0
+        let monitor = ClipboardMonitor(
+            settings: AppSettings(defaults: defaults),
+            pasteboard: pasteboard,
+            changeCountProvider: { generation }
+        )
+        var captures: [CapturedClipboard] = []
+        monitor.onCapture = { captures.append($0) }
+
+        pasteboard.clearContents()
+        generation = 1
+        monitor.checkForChange()
+        pasteboard.setString("delayed browser text", forType: .string)
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        #expect(captures.count == 1)
+        #expect(captures.first?.kind == .text)
+        #expect(captures.first?.text == "delayed browser text")
+    }
+
     @Test func changedGenerationDropsSynchronousTextCapture() throws {
         let suiteName = "SSClipTests-text-generation-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

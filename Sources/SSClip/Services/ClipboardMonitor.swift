@@ -16,6 +16,7 @@ final class ClipboardMonitor {
     private var timer: Timer?
     private var lastChangeCount: Int
     private var ignoredChangeCount: Int?
+    private var retryTask: Task<Void, Never>?
     private var encodeTask: Task<Void, Never>?
     private let changeCountProvider: () -> Int
     private let imageEncoder: @Sendable (Data) async -> EncodedClipboardImage?
@@ -48,6 +49,8 @@ final class ClipboardMonitor {
     func stop() {
         timer?.invalidate()
         timer = nil
+        retryTask?.cancel()
+        retryTask = nil
         encodeTask?.cancel()
         encodeTask = nil
     }
@@ -60,28 +63,41 @@ final class ClipboardMonitor {
         let currentChangeCount = changeCountProvider()
         guard currentChangeCount != lastChangeCount else { return }
         lastChangeCount = currentChangeCount
+        retryTask?.cancel()
+        retryTask = nil
         encodeTask?.cancel()
         encodeTask = nil
         if ignoredChangeCount == currentChangeCount {
             ignoredChangeCount = nil
             return
         }
+        attemptCapture(changeCount: currentChangeCount, retriesRemaining: Self.maximumReadRetries)
+    }
+
+    private func attemptCapture(changeCount: Int, retriesRemaining: Int) {
+        guard changeCountProvider() == changeCount else { return }
         guard !Self.shouldIgnore(types: pasteboard.types ?? []) else { return }
 
         if let capture = readTextOrFilesCapture() {
-            guard changeCountProvider() == currentChangeCount else { return }
+            guard changeCountProvider() == changeCount else { return }
+            retryTask = nil
             deliver(capture)
             return
         }
 
+        // Browser clipboard APIs can increment changeCount before promised data is readable.
+        // Retry the same generation briefly instead of permanently discarding that change.
+        guard let tiff = NSImage(pasteboard: pasteboard)?.tiffRepresentation else {
+            scheduleRetry(changeCount: changeCount, retriesRemaining: retriesRemaining)
+            return
+        }
+
         // PNG encoding of large screenshots can take noticeable time; keep it off the main actor.
-        guard let tiff = NSImage(pasteboard: pasteboard)?.tiffRepresentation else { return }
-        let sourceChangeCount = currentChangeCount
         encodeTask = Task { [weak self] in
             guard let self,
                   let encoded = await imageEncoder(tiff),
                   !Task.isCancelled,
-                  changeCountProvider() == sourceChangeCount
+                  changeCountProvider() == changeCount
             else { return }
             self.deliver(CapturedClipboard(
                 kind: .image,
@@ -90,6 +106,15 @@ final class ClipboardMonitor {
                 imageData: encoded.data,
                 filePaths: []
             ))
+        }
+    }
+
+    private func scheduleRetry(changeCount: Int, retriesRemaining: Int) {
+        guard retriesRemaining > 0 else { return }
+        retryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: Self.readRetryDelayNanoseconds)
+            guard let self, !Task.isCancelled else { return }
+            self.attemptCapture(changeCount: changeCount, retriesRemaining: retriesRemaining - 1)
         }
     }
 
@@ -125,6 +150,10 @@ final class ClipboardMonitor {
         }
         return nil
     }
+
+    /// Browser clipboard APIs can increment changeCount before promised data is readable.
+    private static let maximumReadRetries = 8
+    private static let readRetryDelayNanoseconds: UInt64 = 50_000_000
 
     /// 超过 1 MB 的富文本数据只保留纯文本，避免历史文件被单条记录撑爆。
     static let maximumRichDataBytes = 1 << 20
