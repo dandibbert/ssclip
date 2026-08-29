@@ -115,93 +115,43 @@ final class ClipboardPanelController: NSObject, NSWindowDelegate {
     }
 
     private func handle(_ event: NSEvent) -> Bool {
-        // 输入法组字中（拼音候选等）：按键全部交给输入法，⎋ 取消组字、方向键选字。
-        if isComposingWithInputMethod { return false }
+        guard let command = PanelKeyRouter.command(
+            for: event,
+            isSearching: model.isSearching,
+            searchQuery: model.searchQuery,
+            isComposing: isComposingWithInputMethod,
+            shortcuts: model.settings.panelShortcuts
+        ) else { return false }
 
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let shortcuts = model.settings.panelShortcuts
-        if shortcuts.search.matches(event) {
+        switch command {
+        case .activateSearch:
             model.activateSearch()
-            return true
-        }
-        if event.keyCode == 53 {
-            if model.isSearching || !model.searchQuery.isEmpty { model.closeSearch() } else { model.hidePanel() }
-            return true
-        }
-        // 搜索时仍可用纯文本粘贴，但只放行不会往输入框打字的组合（⌘/⌃ 组合或 ↩ 这类控制键）。
-        if shortcuts.pastePlainText.matches(event),
-           !model.isSearching || Self.isSafeWhileTyping(event) {
+        case .closeSearch:
+            model.closeSearch()
+        case .hidePanel:
+            model.hidePanel()
+        case .pastePlainText:
             model.pasteSelectedAsPlainText()
-            return true
-        }
-        // ⌘1…⌘9 / ⌘0：任何状态下粘贴当前页对应条目；搜索时裸数字要留给输入框。
-        if modifiers.contains(.command), modifiers.isDisjoint(with: [.control, .option]),
-           let value = event.charactersIgnoringModifiers,
-           let digit = Int(value), value.count == 1 {
-            model.pasteItem(at: digit == 0 ? 9 : digit - 1)
-            return true
-        }
-        if model.isSearching {
-            // 单行输入框用不到 ↑/↓：借给列表移动选中；↩ 由输入框 onSubmit 粘贴选中条目。
-            switch event.keyCode {
-            case 125 where modifiers.isDisjoint(with: [.command, .control, .option, .shift]):
-                model.moveSelection(by: 1)
-                return true
-            case 126 where modifiers.isDisjoint(with: [.command, .control, .option, .shift]):
-                model.moveSelection(by: -1)
-                return true
-            default:
-                return false
-            }
-        }
-        if shortcuts.toggleFavorite.matches(event) {
+        case let .pasteAtIndex(index):
+            model.pasteItem(at: index)
+        case let .moveSelection(offset):
+            model.moveSelection(by: offset)
+        case .toggleFavorite:
             model.toggleFavoriteForSelected()
-            return true
-        }
-        if shortcuts.deleteItem.matches(event) {
+        case .deleteSelected:
             model.deleteSelected()
-            return true
-        }
-
-        if event.keyCode == 48, modifiers.isDisjoint(with: [.command, .control, .option]) {
+        case .togglePrimarySection:
             model.togglePrimarySection()
-            return true
-        }
-
-        if modifiers.contains(.command), event.keyCode == 123 {
+        case .previousPage:
             model.previousPage()
-            return true
-        }
-        if modifiers.contains(.command), event.keyCode == 124 {
+        case .nextPage:
             model.nextPage()
-            return true
-        }
-
-        if modifiers.isDisjoint(with: [.command, .control, .option]),
-           let value = event.charactersIgnoringModifiers,
-           let digit = Int(value), value.count == 1 {
-            model.pasteItem(at: digit == 0 ? 9 : digit - 1)
-            return true
-        }
-        switch event.keyCode {
-        case 123: model.previousPage()
-        case 124: model.nextPage()
-        case 125: model.moveSelection(by: 1)
-        case 126: model.moveSelection(by: -1)
-        case 36 where modifiers.isEmpty: model.pasteSelected()
-        case 49: model.showPreviewImmediately()
-        default:
-            return false
+        case .pasteSelected:
+            model.pasteSelected()
+        case .showPreview:
+            model.showPreviewImmediately()
         }
         return true
-    }
-
-    static func isSafeWhileTyping(_ event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        if !modifiers.isDisjoint(with: [.command, .control]) { return true }
-        guard let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first else { return true }
-        return CharacterSet.controlCharacters.contains(scalar)
-            || (0xF700...0xF8FF).contains(scalar.value) // NSEvent 功能键专用区
     }
 
     /// 搜索框正通过输入法组字（拼音候选未上屏）时为 true。
