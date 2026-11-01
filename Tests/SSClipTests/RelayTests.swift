@@ -134,6 +134,27 @@ struct RelayAppModelTests {
         #expect(context.effects.calls == 0)
     }
 
+    @Test func knownCredentialCaptureDoesNotJoinBatchAndRestoresQueueHead() throws {
+        let context = try makeContext()
+        defer { context.cleanUp() }
+        let token = "synthetic-test-token-" + UUID().uuidString
+        RelayCredential.remember(token)
+        context.model.toggleBatchMode()
+        defer { context.model.toggleBatchMode() }
+        context.model.handleCapture(capture("queue head"))
+        context.model.handleCapture(capture("queue second"))
+        let ids = context.model.batchItemIDs
+        let historyIDs = context.store.items.map(\.id)
+        context.pasteboard.clearContents()
+        context.pasteboard.setString(token, forType: .string)
+        context.model.handleCapture(capture(token))
+        #expect(context.model.batchItemIDs == ids)
+        #expect(context.store.items.map(\.id) == historyIDs)
+        #expect(!context.store.items.contains { $0.text == token })
+        #expect(context.pasteboard.string(forType: .string) == "queue head")
+        #expect(context.effects.calls == 0)
+    }
+
     @Test func whitespaceOnlyRemoteTextCanBeRecoveredUnmodified() throws {
         let context = try makeContext()
         defer { context.cleanUp() }

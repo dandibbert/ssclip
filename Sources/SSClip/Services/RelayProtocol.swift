@@ -20,6 +20,7 @@ struct RelayReceipt: Codable, Identifiable {
     let scope: String
     var pendingAck: Bool
     var hidden = false
+    var identity: String { scope + "|" + id }
 }
 enum RelayPolicy {
     static let devices = ["iphone-test", "mac-mini-test", "macbook-test"]

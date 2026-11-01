@@ -35,9 +35,12 @@ final class AppModel: ObservableObject {
 
     lazy var relay = RelayController(model: self)
 
-    func removeRelayCredentialsFromHistory() {
-        for item in store.items where item.text.map(RelayCredential.isCredential) == true { store.remove(item) }
-        try? store.saveImmediately()
+    @discardableResult
+    func removeRelayCredentialsFromHistory() -> Bool {
+        let matches = store.items.filter { $0.text.map(RelayCredential.isCredential) == true }
+        guard !matches.isEmpty else { return true }
+        for item in matches { store.remove(item) }
+        do { try store.saveImmediately(); return true } catch { return false }
     }
 
     /// Relay never enters the batch capture path or synthesizes a paste.
@@ -143,7 +146,10 @@ final class AppModel: ObservableObject {
 
     func handleCapture(_ capture: CapturedClipboard) {
         lastClipboardActivity = Date()
-        if let text = capture.text, RelayCredential.isCredential(text) { return }
+        if let text = capture.text, RelayCredential.isCredential(text) {
+            if isBatchMode { writeQueueHead() }
+            return
+        }
         let added = store.add(capture)
         if isBatchMode, let added {
             batchItemIDs.append(added.id)

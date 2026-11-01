@@ -29,6 +29,9 @@ struct RelaySettingsView: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .accessibilityLabel("同步状态：\(relay.status)")
+                if let warning = relay.credentialWarning {
+                    Text(warning).font(.caption).foregroundStyle(.red)
+                }
                 if hasChanges {
                     Text("请先保存配置，再启用同步。")
                         .font(.caption)
@@ -72,11 +75,16 @@ struct RelaySettingsView: View {
                         guard let url = URL(string: relay.serviceURL), url.scheme == "https" else { return }
                         NSWorkspace.shared.open(url)
                     }
+                    .disabled(relay.isBatchMode)
                 }
+                Text("请先退出批量模式再配对，以免复制凭据时被批量队首替换。")
+                    .font(.caption)
+                    .foregroundStyle(relay.isBatchMode ? Color.red : Color.secondary)
                 SecureField(relay.hasCredential ? "已保存在钥匙串；留空不更换" : "粘贴配对页面提供的服务凭据", text: $token)
                     .textFieldStyle(.roundedBorder)
                     .disableAutocorrection(true)
                     .accessibilityLabel("服务凭据（保存到系统钥匙串）")
+                    .disabled(relay.isBatchMode)
                 Text("保存后凭据写入系统钥匙串，并移除 SSClip 历史中的匹配文本。复制配对凭据期间可能暂时被剪贴板工具记录；请勿用其他同步工具转发。保存后请自行复制普通文本替换系统剪贴板。更换服务端时请同时输入新凭据。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -113,7 +121,7 @@ struct RelaySettingsView: View {
                 Text("以下内容已保存到本机明文收件箱；需要时手动复制。批量模式下不会覆盖队首。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                ForEach(Array(relay.inbox.filter { !$0.hidden }.prefix(10))) { receipt in
+                ForEach(Array(relay.inbox.filter { !$0.hidden }.prefix(10)), id: \.identity) { receipt in
                     VStack(alignment: .leading, spacing: 6) {
                         HStack {
                             Text(RelayController.devices.first(where: { $0.id == receipt.source })?.name ?? receipt.source)

@@ -6,29 +6,34 @@ import Foundation
 final class RelayController: ObservableObject {
     static let devices: [(id: String, name: String)] = [("mac-mini-test", "Mac mini"), ("macbook-test", "MacBook"), ("iphone-test", "iPhone（网页接收）")]
     @Published private(set) var enabled = false
+    @Published private(set) var isBatchMode = false
     @Published private(set) var serviceURL: String
     @Published private(set) var deviceID: String
     @Published private(set) var targetID: String
     @Published private(set) var status = "同步未启用"
+    @Published private(set) var credentialWarning: String?
     @Published private(set) var isSending = false
     @Published private(set) var inbox: [RelayReceipt] = []
     var hasCredential: Bool { credentialReader(serviceURL) != nil }
     private weak var model: AppModel?
     private let defaults: UserDefaults
     private let journalURL: URL
+    private let pasteboard: NSPasteboard
     private let session: URLSession
     private let credentialReader: (String) -> String?
     private let sleepNanoseconds: UInt64
     private var receiveTask: Task<Void, Never>?
     private var sendTask: Task<Void, Never>?
     private var generation = UUID()
+    private var batchObservation: AnyCancellable?
     private var journalHealthy = true
     private var scope: String { serviceURL + "|" + deviceID }
 
     init(model: AppModel, defaults: UserDefaults = .standard, directory: URL? = nil,
-         session: URLSession? = nil, credentialReader: @escaping (String) -> String? = RelayCredential.read,
+         session: URLSession? = nil, pasteboard: NSPasteboard = .general, credentialReader: @escaping (String) -> String? = RelayCredential.read,
          sleepNanoseconds: UInt64 = 3_000_000_000) {
         self.model = model
+        self.pasteboard = pasteboard
         self.credentialReader = credentialReader
         self.sleepNanoseconds = sleepNanoseconds
         self.defaults = defaults
@@ -54,8 +59,9 @@ final class RelayController: ObservableObject {
         }
         if let saved = credentialReader(serviceURL) {
             RelayCredential.remember(saved)
-            model.removeRelayCredentialsFromHistory()
+            if !model.removeRelayCredentialsFromHistory() { credentialWarning = "凭据的本地历史清理未能写入磁盘，请检查存储错误；旧历史文件可能仍含凭据。" }
         }
+        batchObservation = model.$isBatchMode.sink { [weak self] value in self?.isBatchMode = value }
         // First launch is opt-in; honor a previously saved user choice.
         if defaults.bool(forKey: "relay.enabled") { setEnabled(true) }
     }
@@ -76,7 +82,7 @@ final class RelayController: ObservableObject {
         }
         if let token, !token.isEmpty {
             RelayCredential.remember(token)
-            model?.removeRelayCredentialsFromHistory()
+            if model?.removeRelayCredentialsFromHistory() == false { credentialWarning = "凭据已存钥匙串，但历史清理保存失败；旧历史文件可能仍含凭据，请检查存储错误。" }
         }
         self.serviceURL = normalized; self.deviceID = deviceID; self.targetID = targetID
         defaults.set(normalized, forKey: "relay.url")
@@ -132,11 +138,11 @@ final class RelayController: ObservableObject {
     private func pollLoop(_ current: UUID) async {
         var lastSuccess: Date?
         var failures = 0
-        var lastObservedChange = NSPasteboard.general.changeCount
+        var lastObservedChange = pasteboard.changeCount
         var lastObservedChangeAt = Date.distantPast
         while enabled && current == generation && !Task.isCancelled {
             let started = Date()
-            let changeCount = NSPasteboard.general.changeCount
+            let changeCount = pasteboard.changeCount
             if changeCount != lastObservedChange {
                 lastObservedChange = changeCount
                 lastObservedChangeAt = started
@@ -171,7 +177,7 @@ final class RelayController: ObservableObject {
                     let messageAge = (response.server_time - message.created_at) / 1000
                     let canCopy = localQuietFor > max(3, messageAge + 1) && RelayPolicy.mayAutoCopy(created: message.created_at, serverTime: response.server_time,
                         continuous: continuous && Date().timeIntervalSince(started) < 10,
-                        requestUnchanged: NSPasteboard.general.changeCount == changeCount,
+                        requestUnchanged: pasteboard.changeCount == changeCount,
                         batch: model?.isBatchMode ?? true, latest: message.id == valid.last?.id)
                     let copied = canCopy && (model?.receiveRelayText(message.text) ?? false)
                     status = copied ? "已接收并复制；尚未粘贴" : "已收到，暂存同步收件箱（未覆盖剪贴板）"
@@ -198,7 +204,7 @@ final class RelayController: ObservableObject {
 
     func sendCurrentClipboard() {
         guard enabled, !isSending, deviceID != targetID,
-              let text = NSPasteboard.general.string(forType: .string), RelayPolicy.validText(text) else {
+              let text = pasteboard.string(forType: .string), RelayPolicy.validText(text) else {
             status = "请先开启同步；仅支持非空纯文本，最多 32 KiB"; return
         }
         guard !RelayCredential.isCredential(text) else {
