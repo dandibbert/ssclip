@@ -377,7 +377,7 @@ struct RelayNetworkTests {
         try await eventually { context.scenario.count("send") == 1 && !context.controller.isSending }
         #expect(!context.controller.enabled)
         #expect(context.scenario.count("poll") == 0)
-        #expect(context.controller.status.contains("服务器已接收"))
+        #expect(context.controller.status.contains("已提交"))
     }
 
     @Test func deviceUUIDPersistsAcrossControllerRecreation() throws {
@@ -505,7 +505,7 @@ struct RelayNetworkTests {
         context.controller.onSendFeedback = { feedback.append($0) }
         context.controller.sendCurrentClipboard()
         try await eventually { context.scenario.count("send") == 1 && !context.controller.isSending }
-        #expect(feedback.contains { $0.contains("服务器已接收") && $0.contains("Other device") && $0.contains("不代表") })
+        #expect(feedback.contains { $0.contains("已提交") && $0.contains("Other device") && !$0.contains("不代表") })
         context.controller.sendCurrentClipboard()
         #expect(context.controller.status.contains("重复发送"))
         try await Task.sleep(nanoseconds: 30_000_000)
@@ -545,8 +545,9 @@ struct RelayNetworkTests {
         if mode == "barkLarge" { #expect(context.controller.status.contains("未截断")) }
         if mode == "barkUnknown" { #expect(context.controller.status.contains("先检查 iPhone")) }
         if mode == "barkSubmitted" {
-            #expect(context.controller.status.contains("Bark 已接受推送"))
-            #expect(context.controller.status.contains("不代表手机已收到或复制"))
+            #expect(context.controller.status.contains("Bark 已接受"))
+            #expect(!context.controller.status.contains("不代表"))
+            #expect(!context.controller.status.contains("已复制"))
         }
         #expect(!context.controller.status.contains("ordinary text"))
         #expect(!context.controller.status.contains(testAPIKey))

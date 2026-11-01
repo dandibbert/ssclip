@@ -1,2 +1,2 @@
-PASS: 3014 structural/privacy/generated-dictionary checks; 513 main actions. iOS runtime and Apple signing NOT verified by these checks.
-921166843c56bd0f5771cd3099d817b6cb59ab5a002835fbb712acd0749789c0 SSClip发送_unsigned.shortcut
+PASS: 3105 structural/privacy/generated-dictionary checks; 526 main actions. iOS runtime and Apple signing NOT verified by these checks.
+c9452a5806404bef095b9530e9c01ea4eedb703bfdb9b4a7b6f1345138a9512d SSClip发送_unsigned.shortcut

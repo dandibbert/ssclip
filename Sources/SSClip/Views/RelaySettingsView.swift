@@ -57,9 +57,10 @@ struct RelaySettingsView: View {
             DisclosureGroup("连接与高级设置", isExpanded: $advancedExpanded) {
                 advancedSettings.padding(.top, 8)
             }
-            Text("只在点击发送时上传纯文本，最多 32 KiB。服务端明文暂存，最长 20 分钟有效，不是端到端加密；本机收件箱与历史另行保留。不要发送密码等敏感信息。iPhone 接收可在管理端配置 Bark；Bark 受 APNs 4096 字节总通知预算限制（含元数据），不会截断文本。")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            DisclosureGroup("使用与安全说明") {
+                Text("发送仅在你操作时上传纯文本，最多 32 KiB。服务端明文暂存最长 20 分钟，本机收件箱与历史另行保留。不要发送密码等敏感信息。Bark 受 APNs 4096 字节总通知预算限制，不截断。‘已提交’表示服务器接受，‘Bark 已接受’表示推送服务接受，不保证目标已收到或复制。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .font(.system(size: 12))
         .onAppear { updateDrafts() }
@@ -70,7 +71,7 @@ struct RelaySettingsView: View {
         VStack(alignment: .leading, spacing: 9) {
             Label("iPhone 发送剪贴板", systemImage: "iphone")
                 .font(.headline)
-            Text("在已登录 iCloud 的这台 Mac 生成一次快捷指令，AirDrop 到 iPhone 并打开安装。首次运行只导入管理端的连接 JSON；以后复制文本，运行快捷指令并选择这次接收的设备。")
+            Text("iPhone 用“SSClip发送”，每次选择接收 Mac。首次导入连接配置一次。")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button(shortcutExporter.isBusy ? "正在生成…" : "生成 iPhone 快捷指令") {
@@ -82,13 +83,17 @@ struct RelaySettingsView: View {
                     Button("取消") { shortcutExporter.cancel() }
                 }
             }
-            Text("只需一个“SSClip发送”。每次选择目标，不保存默认设备；设备列表里的“更换连接配置…”可重新导入。已有连接配置自动沿用，旧“SSClip设置”可以删除。请保留主快捷指令名称。")
+            Button("更新 iPhone 快捷指令…") { shortcutExporter.chooseDownloadedTemplate() }
+                .disabled(shortcutExporter.isBusy)
+            Text("以后只下载新模板并在这里签名，无需重装 SSClip。")
                 .font(.caption).foregroundStyle(.secondary)
             if !shortcutExporter.status.isEmpty {
                 Text(shortcutExporter.status).font(.caption).foregroundStyle(.secondary)
             }
-            Text("使用 Apple 官方签名，不需要提供 Apple 密码；模板不含 API Key。未签名模板不能直接安装到 iPhone。")
-                .font(.caption).foregroundStyle(.secondary)
+            DisclosureGroup("安装与更新说明") {
+                Text("签名需要这台 Mac 已登录 iCloud。只选择 SSClip 仓库或管理端提供的模板；格式检查不验证发布者身份。签名只生成文件，不执行快捷指令。生成后 AirDrop 到 iPhone 替换同名快捷指令；下载的 .ssclip-template 是模板，不是 iPhone 安装文件。已有连接沿用，旧‘SSClip设置’可以删除。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
 

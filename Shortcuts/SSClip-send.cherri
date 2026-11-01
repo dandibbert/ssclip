@@ -10,21 +10,36 @@
 #include 'actions/sharing'
 
 // Storage is intentionally the user's private iCloud Drive/Shortcuts area.
-action 'documentpicker.open' loadSSClipState() {
+action 'documentpicker.open' loadCanonicalState() {
+ "WFGetFilePath":"/SSClip/connection-state.txt", "WFFileErrorIfNotFound":false
+}
+// Exact legacy filenames only; startup compatibility never deletes or rewrites them.
+action 'documentpicker.open' loadLegacyAppendedState() {
+ "WFGetFilePath":"/SSClip/connection-state.json.txt", "WFFileErrorIfNotFound":false
+}
+action 'documentpicker.open' loadLegacyJSONState() {
  "WFGetFilePath":"/SSClip/connection-state.json", "WFFileErrorIfNotFound":false
 }
 action 'documentpicker.save' saveSSClipState(variable content: 'WFInput') {
  "WFFileStorageService":"iCloud Drive", "WFAskWhereToSave":false,
- "WFFileDestinationPath":"SSClip/connection-state.json", "WFSaveFileOverwrite":true
+ "WFFileDestinationPath":"SSClip/connection-state.txt", "WFSaveFileOverwrite":true
 }
 action 'file.createfolder' makeSSClipFolder() {
  "WFFileStorageService":"iCloud Drive", "WFFilePath":"SSClip"
 }
 // No third-party action, webpage JavaScript, key-in-URL, or embedded credential.
-comment('SSClip：首次选择管理端连接 JSON；以后每次运行选择接收设备，再发送纯文本。设备列表中可更换连接配置。配置保存在本人 iCloud Drive/Shortcuts/SSClip，勿分享。服务器接收不等于接收设备已收到或复制。')
+comment('SSClip发送：导入连接配置一次；以后每次选择一台 Mac，提交当前纯文本剪贴板。')
 @setupInput = ShortcutInput
-@stateFile = loadSSClipState()
+@stateFile = loadCanonicalState()
 @stateCount = count(@stateFile, "Items")
+if @stateCount.number < 1 {
+ @stateFile = loadLegacyAppendedState()
+ @stateCount = count(@stateFile, "Items")
+}
+if @stateCount.number < 1 {
+ @stateFile = loadLegacyJSONState()
+ @stateCount = count(@stateFile, "Items")
+}
 @needsConfig = 0
 @apiKey = ""
 @targetID = ""
@@ -161,10 +176,11 @@ if @registeredID.text != @senderID {
 if @needsConfig == 1 {
  @newState = {"format":"ssclip-connection","version":1,"server_url":"{@server}","api_key":"{@apiKey}"}
  @newStateText = getText(@newState)
+ @namedStateFile = setName(@newStateText, "connection-state.txt", false)
  makeSSClipFolder()
- saveSSClipState(@newStateText)
- // Must verify using the cold-start loader, never only the Save File output.
- @verifiedFile = loadSSClipState()
+ saveSSClipState(@namedStateFile)
+ // Canonical-only readback: legacy fallback must never disguise a failed new save.
+ @verifiedFile = loadCanonicalState()
  @verifiedCount = count(@verifiedFile, "Items")
  if @verifiedCount.number < 1 {
   alert("保存后无法从固定路径重新读到配置，不能确认已保存。本次未发送。请只反馈文件位置和文件名，不要分享内容。", "保存校验失败")
@@ -195,7 +211,7 @@ if @needsConfig == 1 {
   alert("读回的凭据与本次设置不匹配，不能确认已保存。本次未发送，不要分享配置内容。", "保存校验失败")
   stop()
  }
- alert("连接配置已保存并读回校验。本次未发送剪贴板；下次运行请选择接收设备。", "SSClip 已连接")
+ alert("连接已保存", "SSClip")
  stop()
 }
 @devicesRaw = downloadURL("{@server}/api/service/devices", {"Authorization":"Bearer {@apiKey}"})
@@ -203,21 +219,17 @@ if @needsConfig == 1 {
 @devices = getValue(@deviceResponse, "devices")
 @choices = []
 @choiceMap = {}
+@choiceNameMap = {}
 for device in @devices {
  @item = getDictionary(@device)
  @platformValue = getValue(@item, "platform")
  @platform = getText(@platformValue)
- @transportValue = getValue(@item, "transport")
- @transport = getText(@transportValue)
  @idValue = getValue(@item, "id")
  @id = getText(@idValue)
  @nameValue = getValue(@item, "name")
  @name = getText(@nameValue)
  @eligible = 0
  if @platform.text == "macos" { @eligible = 1 }
- if @platform.text == "ios" {
-  if @transport.text == "bark" { @eligible = 1 }
- }
  // Dictionary text is native JSON: detect explicit JSON false, not localized Boolean text.
  @itemJSON = getText(@item)
  @receiveDisabled = matchText('"can_receive"\s*:\s*false\s*[,}]', @itemJSON)
@@ -229,6 +241,7 @@ for device in @devices {
     @label = "{@name} · {@id}"
     @choices += @label
     @choiceMap = setValue(@choiceMap, @label, @id)
+    @choiceNameMap = setValue(@choiceNameMap, @label, @name)
    }
   }
  }
@@ -236,7 +249,7 @@ for device in @devices {
 // Every run selects a fresh target; never reuse old target_id/target_name state.
 @changeConnection = "更换连接配置…"
 @choices += @changeConnection
-@choice = chooseFromList(@choices, "选择本次接收设备；取消不会发送")
+@choice = chooseFromList(@choices, "选择接收 Mac")
 if !@choice { stop() }
 if @choice.text == @changeConnection {
  @reimportMarker = "SSCLIP_REIMPORT_V2"
@@ -246,10 +259,11 @@ if @choice.text == @changeConnection {
 @targetIDValue = getValue(@choiceMap, @choice)
 @targetID = getText(@targetIDValue)
 if !@targetID {
- alert("未选择有效接收设备，没有发送。请重新运行并选择设备。", "未发送")
+ alert("未选择有效 Mac，没有发送。", "未发送")
  stop()
 }
-@targetName = @choice
+@targetNameValue = getValue(@choiceNameMap, @choice)
+@targetName = getText(@targetNameValue)
 // Only now read clipboard: setup never reads it, and HTTP/file responses cannot become accidental input.
 @clipboard = getClipboard()
 @clipboardType = typeOf(@clipboard)
@@ -286,13 +300,13 @@ if @configMarker {
 @sendState = getText(@sendStateValue)
 if @returnedID.text == @messageID {
  if @sendState.text == "pending" {
-  alert("服务器已接收 → {@targetName}。20 分钟内有效；不代表接收设备已收到或复制。", "SSClip")
+  alert("已提交 → {@targetName}", "SSClip")
   stop()
  }
  if @sendState.text == "acknowledged" {
-  alert("服务器记录该消息已被接收端确认；是否写入剪贴板请看接收设备状态。", "SSClip")
+  alert("已提交 → {@targetName}", "SSClip")
   stop()
  }
 }
-alert("未确认发送成功，可能已到达。请先检查接收设备，勿直接重复发送。不要分享包含配置的运行详情。", "SSClip")
+alert("未确认提交成功，请先检查 Mac，勿重复发送。", "SSClip")
 stop()

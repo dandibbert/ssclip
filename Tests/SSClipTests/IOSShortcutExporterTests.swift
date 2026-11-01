@@ -17,8 +17,7 @@ struct IOSShortcutExporterTests {
         try await finished(exporter)
         #expect(try Data(contentsOf: files.output) == Data("AEA1synthetic-signed-output-for-unit-test".utf8))
         #expect(try Data(contentsOf: files.input) == files.original)
-        #expect(exporter.status.contains("已生成签名快捷指令"))
-        #expect(exporter.status.contains("每次发送选择接收设备"))
+        #expect(exporter.status.contains("已生成"))
         #expect(!exporter.status.contains("默认"))
     }
 
@@ -94,6 +93,85 @@ struct IOSShortcutExporterTests {
         try await finished(exporter)
         #expect(try Data(contentsOf: files.output) == files.previous)
         #expect(exporter.status.contains("未保存安装文件"))
+    }
+
+    private func downloadedTemplate() throws -> Data {
+        let actions: [[String: Any]] = [
+            ["WFWorkflowActionIdentifier": "is.workflow.actions.comment", "WFWorkflowActionParameters": ["WFCommentActionText": "SSClip synthetic template"]],
+            ["WFWorkflowActionIdentifier": "is.workflow.actions.exit"]
+        ]
+        return try PropertyListSerialization.data(fromPropertyList: ["WFWorkflowActions": actions], format: .xml, options: 0)
+    }
+
+    @Test func downloadedTemplateSignsWithoutChangingBundledOrSelectedSource() async throws {
+        let files = try fixture()
+        defer { try? FileManager.default.removeItem(at: files.root) }
+        let downloaded = files.root.appendingPathComponent("downloaded.shortcut")
+        let template = try downloadedTemplate()
+        try template.write(to: downloaded)
+        let exporter = IOSShortcutExporter(templateURL: { files.input }, signer: { input, output in
+            #expect(try Data(contentsOf: input) == template)
+            #expect(input.lastPathComponent == "SSClip发送.shortcut")
+            try Data("AEA1synthetic-external-template-signature".utf8).write(to: output)
+            return ShortcutSigningResult(exitCode: 0, diagnostic: "")
+        })
+        exporter.beginExport(to: files.output, source: downloaded)
+        try await finished(exporter)
+        #expect(exporter.status.contains("已生成"))
+        #expect(try Data(contentsOf: downloaded) == template)
+        #expect(try Data(contentsOf: files.input) == files.original)
+    }
+
+    @Test func invalidExternalFileNeverSignsOrChangesExistingFiles() async throws {
+        let files = try fixture()
+        defer { try? FileManager.default.removeItem(at: files.root) }
+        let downloaded = files.root.appendingPathComponent("connection.shortcut")
+        try Data("{\"api_key\":\"synthetic-secret\"}".utf8).write(to: downloaded)
+        var called = false
+        let exporter = IOSShortcutExporter(templateURL: { files.input }, signer: { _, _ in
+            called = true; return ShortcutSigningResult(exitCode: 0, diagnostic: "")
+        })
+        exporter.beginExport(to: files.output, source: downloaded)
+        try await finished(exporter)
+        #expect(!called)
+        #expect(try Data(contentsOf: files.output) == files.previous)
+        #expect(try Data(contentsOf: files.input) == files.original)
+        #expect(!exporter.status.contains("synthetic-secret"))
+        #expect(!IOSShortcutExporter.validDownloadedTemplate(Data("AEA1already-signed".utf8)))
+        #expect(!IOSShortcutExporter.validDownloadedTemplate(Data(repeating: 0, count: 2 * 1024 * 1024 + 1)))
+    }
+
+    @Test func externalSigningCannotOverwriteBundledTemplate() async throws {
+        let files = try fixture()
+        defer { try? FileManager.default.removeItem(at: files.root) }
+        let downloaded = files.root.appendingPathComponent("downloaded.shortcut")
+        try downloadedTemplate().write(to: downloaded)
+        var called = false
+        let exporter = IOSShortcutExporter(templateURL: { files.input }, signer: { _, _ in
+            called = true; return ShortcutSigningResult(exitCode: 0, diagnostic: "")
+        })
+        exporter.beginExport(to: files.input, source: downloaded)
+        try await finished(exporter)
+        #expect(!called)
+        #expect(try Data(contentsOf: files.input) == files.original)
+    }
+
+    @Test func cancellingExternalSigningKeepsSourcesAndOutputIntact() async throws {
+        let files = try fixture()
+        defer { try? FileManager.default.removeItem(at: files.root) }
+        let downloaded = files.root.appendingPathComponent("downloaded.shortcut")
+        let data = try downloadedTemplate(); try data.write(to: downloaded)
+        let exporter = IOSShortcutExporter(templateURL: { files.input }, signer: { _, _ in
+            try await Task.sleep(nanoseconds: 10_000_000_000)
+            return ShortcutSigningResult(exitCode: 0, diagnostic: "")
+        })
+        exporter.beginExport(to: files.output, source: downloaded)
+        exporter.cancel()
+        try await finished(exporter)
+        #expect(exporter.status.contains("已取消"))
+        #expect(try Data(contentsOf: files.output) == files.previous)
+        #expect(try Data(contentsOf: downloaded) == data)
+        #expect(try Data(contentsOf: files.input) == files.original)
     }
 
     @Test func cannotOverwriteOriginalTemplate() async throws {

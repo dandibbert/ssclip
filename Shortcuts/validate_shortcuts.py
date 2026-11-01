@@ -56,11 +56,11 @@ check(set(fields)=={'id','source','target','text','ttl_seconds'},'Complete proto
 text=fields['text']['Value']
 check(text['string']=='\ufffc' and next(iter(text['attachmentsByRange'].values()))['VariableName']=='text','Text JSON value uses native magic variable')
 reads=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.documentpicker.open']
-check(len(reads)==2,'Cold start and readback use same shared connection state')
+check(len(reads)==4,'Canonical startup/readback plus two exact legacy reads')
 for q in reads:
- check(q['WFGetFilePath']=='/SSClip/connection-state.json' and q['WFFileErrorIfNotFound'] is False and 'WFFileStorageService' not in q and 'WFShowFilePicker' not in q,'Modern observed file loader, same canonical path')
+ check(q['WFGetFilePath'] in ['/SSClip/connection-state.txt','/SSClip/connection-state.json.txt','/SSClip/connection-state.json'] and q['WFFileErrorIfNotFound'] is False and 'WFFileStorageService' not in q and 'WFShowFilePicker' not in q,'Modern observed file loader, same canonical path')
 writes=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.documentpicker.save']
-check({q['WFFileDestinationPath'] for q in writes}=={'SSClip/connection-state.json'},'No clipboard body persistence')
+check({q['WFFileDestinationPath'] for q in writes}=={'SSClip/connection-state.txt'},'No clipboard body persistence')
 for q in writes:check(q['WFAskWhereToSave'] is False and q['WFFileStorageService']=='iCloud Drive','No public config sharing')
 alerts=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.alert']
 for q in alerts:
@@ -168,12 +168,12 @@ check(loaded['server']==old_state['server_url'] and loaded['apiKey']==old_state[
 lookups=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.getvalueforkey']
 check(not any(q['WFDictionaryKey'] in ['target_id','target_name'] for q in lookups if isinstance(q['WFDictionaryKey'],str)),'Never load stale target')
 check('"target_id"' not in source and '"target_name"' not in source,'No default target persisted')
-selects=[i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.choosefromlist' and a['WFWorkflowActionParameters'].get('WFChooseFromListActionPrompt')=='选择本次接收设备；取消不会发送']
+selects=[i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.choosefromlist' and a['WFWorkflowActionParameters'].get('WFChooseFromListActionPrompt')=='选择接收 Mac']
 check(len(selects)==1,'Exactly one destination selector')
 clip_index=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.getclipboard')
 check(selects[0]<clip_index,'Selection precedes clipboard access')
 check('if !@choice { stop() }' in source,'Explicit cancellation early exit')
-check(source.index('saveSSClipState(@newStateText)')<source.index('stop()',source.index('saveSSClipState(@newStateText)'))<source.index('@devicesRaw ='),'Import stops before selection/clipboard/send')
+check(source.index('saveSSClipState(@namedStateFile)')<source.index('stop()',source.index('saveSSClipState(@namedStateFile)'))<source.index('@devicesRaw ='),'Import stops before selection/clipboard/send')
 check('@targetID = ""' in source,'Target initialized empty every run')
 check('@label = "{@name} · {@id}"' in source and '@changeConnection = "更换连接配置…"' in source,'Config entry cannot equal full-ID device label')
 runs=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.runworkflow']
@@ -187,7 +187,7 @@ for index,a in enumerate(acts):
  contexts[index]=list(stack)
  if q.get('WFControlFlowMode')==2:stack.pop()
 check(not contexts[selects[0]],'Daily selector is top-level, never skipped via cached target')
-state_save=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.documentpicker.save' and a['WFWorkflowActionParameters'].get('WFFileDestinationPath')=='SSClip/connection-state.json')
+state_save=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.documentpicker.save' and a['WFWorkflowActionParameters'].get('WFFileDestinationPath')=='SSClip/connection-state.txt')
 check(bool(contexts[state_save]),'State save only within import branch')
 check(any(a['WFWorkflowActionIdentifier']=='is.workflow.actions.exit' for a in acts[state_save:selects[0]]),'Import branch exits before daily chooser/send')
 choice_guard=acts[selects[0]+2]
@@ -247,13 +247,13 @@ check(capability['WFValue']['Value'] is False and capability['WFValue']['WFSeria
 check(register_fields['platform']['WFValue']['Value']['string']=='ios','Shared sender platform remains ios')
 check(next(iter(register_fields['id']['WFValue']['Value']['attachmentsByRange'].values()))['VariableName']=='senderID','Register uses logical sender ID')
 check(next(iter(fields['source']['Value']['attachmentsByRange'].values()))['VariableName']=='senderID','Send source matches logical sender')
-check(any(q['WFDictionaryKey']=='transport' for q in lookups if isinstance(q['WFDictionaryKey'],str)),'Read transport via native dictionary action')
-check('if @platform.text == "ios" {\n  if @transport.text == "bark"' in source,'Only Bark transport qualifies ios receiver')
+check(not any(q['WFDictionaryKey']=='transport' for q in lookups if isinstance(q['WFDictionaryKey'],str)),'iOS sender needs no Bark transport logic')
+check('if @platform.text == "macos"' in source and 'if @platform.text == "ios"' not in source,'iOS sender targets only Mac')
 check('if @id.text != @senderID' in source,'Reserved send-only sender always excluded')
 # Protocol fixtures include explicit disabled receivers, missing capability is compatible.
-receiver_fixtures=[({'id':'mac-recv-111','platform':'macos','transport':'relay','can_receive':True},True),({'id':'bark-ios-222','platform':'ios','transport':'bark','can_receive':True},True),({'id':'old-ios-333','platform':'ios','transport':'relay','can_receive':True},False),({'id':'ios-shortcut-sender','platform':'ios','transport':'relay','can_receive':False},False),({'id':'disabled-bark','platform':'ios','transport':'bark','can_receive':False},False),({'id':'disabled-mac','platform':'macos','transport':'relay','can_receive':False},False)]
+receiver_fixtures=[({'id':'mac-recv-111','platform':'macos','transport':'relay','can_receive':True},True),({'id':'bark-ios-222','platform':'ios','transport':'bark','can_receive':True},False),({'id':'old-ios-333','platform':'ios','transport':'relay','can_receive':True},False),({'id':'ios-shortcut-sender','platform':'ios','transport':'relay','can_receive':False},False),({'id':'disabled-bark','platform':'ios','transport':'bark','can_receive':False},False),({'id':'disabled-mac','platform':'macos','transport':'relay','can_receive':False},False)]
 for row,expected in receiver_fixtures:
- eligible=(row['platform']=='macos' or (row['platform']=='ios' and row['transport']=='bark')) and row['id']!='ios-shortcut-sender' and row.get('can_receive') is not False
+ eligible=row['platform']=='macos' and row['id']!='ios-shortcut-sender' and row.get('can_receive') is not False
  check(eligible==expected,'Current protocol receiver eligibility fixture')
 # Execute the emitted minimal eligibility block rather than only mirror source.
 eligible_start=next(i-1 for i,a in enumerate(acts) if a.get('WFWorkflowActionParameters',{}).get('WFVariableName')=='eligible')
@@ -286,12 +286,29 @@ for row,expected in [({'can_receive':False},True),({'can_receive':True},False),(
 # Credential substring guard includes unmarked legacy state, not only a bare key.
 secret_guard=next(a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.conditional' and a.get('WFWorkflowActionParameters',{}).get('WFCondition')==99)
 check(list(secret_guard['WFConditionalActionString']['Value']['attachmentsByRange'].values())==[{'Type':'Variable','VariableName':'apiKey'}],'Native contains uses runtime key, not a literal credential')
-check('@verifiedFile = loadSSClipState()' in source and '@stateFile = loadSSClipState()' in source,'Readback calls identical cold-start loader')
+check('@verifiedFile = loadCanonicalState()' in source and '@stateFile = loadCanonicalState()' in source,'Readback calls identical cold-start loader')
 initial_count_index=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.count' and a['WFWorkflowActionParameters']['Input']['Value'].get('VariableName')=='stateFile')
-count_gate_index=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.conditional' and a.get('WFWorkflowActionParameters',{}).get('WFInput',{}).get('Variable',{}).get('Value',{}).get('VariableName')=='stateCount')
+count_gate_index=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.conditional' and a.get('WFWorkflowActionParameters',{}).get('WFInput',{}).get('Variable',{}).get('Value',{}).get('VariableName')=='stateCount' and a['WFWorkflowActionParameters'].get('WFCondition')==2)
 file_text_index=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.detect.text' and a['WFWorkflowActionParameters']['WFInput']['Value'].get('VariableName')=='stateFile')
 parse_index=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.detect.dictionary' and a['WFWorkflowActionParameters']['WFInput']['Value'].get('VariableName')=='stateText')
 check(initial_count_index<count_gate_index<file_text_index<parse_index,'Actual Count Items gate precedes explicit file-text-dictionary decode')
 check(acts[count_gate_index]['WFWorkflowActionParameters']['WFCondition']==2 and acts[count_gate_index]['WFWorkflowActionParameters']['WFNumberValue']==0,'Actual file presence is count > 0')
+check([q['WFGetFilePath'] for q in reads]==['/SSClip/connection-state.txt','/SSClip/connection-state.json.txt','/SSClip/connection-state.json','/SSClip/connection-state.txt'],'Startup prioritizes canonical, readback never falls back to old file')
+name_actions=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.setitemname']
+check(len(name_actions)==1,'Exactly one explicit state filename action')
+named=name_actions[0]
+check(named['WFName']=='connection-state.txt' and named['WFDontIncludeFileExtension'] is False,'Actual native full filename with explicit extension flag false')
+check(named['WFInput']['Value']=={'Type':'Variable','VariableName':'newStateText'},'Set Name receives JSON state text')
+named_binding=next(a['WFWorkflowActionParameters'] for a in acts if a.get('WFWorkflowActionParameters',{}).get('WFVariableName')=='namedStateFile')
+check(named_binding['WFInput']['Value']['OutputUUID']==named['UUID'],'Named state variable references real Set Name output')
+check(writes[0]['WFInput']['Value']=={'Type':'Variable','VariableName':'namedStateFile'},'Save uses explicitly named item, not raw text')
+check(not any('delete' in a['WFWorkflowActionIdentifier'] for a in acts),'Never delete existing state files')
+name_setter=next(a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.setvalueforkey' and a['WFWorkflowActionParameters']['WFDictionary']['Value'].get('VariableName')=='choiceNameMap')
+check(list(name_setter['WFDictionaryValue']['Value']['attachmentsByRange'].values())==[{'Type':'Variable','VariableName':'name'}],'Success label stores human name independently of ID')
+name_getter=next(q for q in lookups if q['WFInput']['Value'].get('VariableName')=='choiceNameMap')
+check(list(name_getter['WFDictionaryKey']['Value']['attachmentsByRange'].values())==[{'Type':'Variable','VariableName':'choice'}],'Human name uses same current choice mapping')
+success_alerts=[q for q in alerts if isinstance(q.get('WFAlertActionMessage'),dict) and q['WFAlertActionMessage'].get('Value',{}).get('string')=='已提交 → \ufffc']
+check(len(success_alerts)==2,'Pending/acknowledged use concise submitted feedback, not copied claims')
+check(any(q.get('WFAlertActionMessage')=='连接已保存' for q in alerts),'Import confirmation is concise')
 print(f'PASS: {checks} structural/privacy/generated-dictionary checks; {len(acts)} main actions. iOS runtime and Apple signing NOT verified by these checks.')
 for path in [resource()]:print(hashlib.sha256(path.read_bytes()).hexdigest(),path.name)

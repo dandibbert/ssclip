@@ -90,4 +90,6 @@ scripts/          本地应用打包与图标工具
 
 ### iPhone 入口
 
-在 Mac 的跨设备同步设置中点击“生成 iPhone 快捷指令”，由本人已登录 iCloud 的 Mac 官方签名，再 AirDrop 到 iPhone。只需“SSClip发送”：首次导入连接 JSON，以后每次发送选择当次接收设备；选择列表内可“更换连接配置…”。已有旧版连接自动沿用，旧“SSClip设置”可以删除。Mac 自身默认目标与全局发送快捷键不变。模板无生产密钥；云 CI 无法预签名。上一版已由用户确认 iPhone 设置成功，本轮简化流程仍待实机验证。详见 [iOS 模板说明](Shortcuts/IOS-SHORTCUT-NOTES.md) 与 [安装指南](RELAY-TESTING.md)。
+在 Mac 的跨设备同步设置中点击“生成 iPhone 快捷指令”，由本人已登录 iCloud 的 Mac 官方签名，再 AirDrop 到 iPhone。只需“SSClip发送”：首次导入连接 JSON，以后每次发送选择当次 Mac；选择列表内可“更换连接配置…”。已有旧版连接自动沿用，旧“SSClip设置”可以删除。Mac 自身默认目标与全局发送快捷键不变。模板无生产密钥；云 CI 无法预签名。上一版已由用户确认 iPhone 设置成功，本轮简化流程仍待实机验证。详见 [iOS 模板说明](Shortcuts/IOS-SHORTCUT-NOTES.md) 与 [安装指南](RELAY-TESTING.md)。
+
+后续 iPhone 模板可[独立下载](https://github.com/dandibbert/ssclip/raw/refs/heads/codex/ssclip-relay-test/Shortcuts/SSClip-Send.ssclip-template)，在 Mac 点击“更新 iPhone 快捷指令…”生成安装文件，不必每次重装 Mac App。当前修复统一使用 `.txt` 缓存 JSON 内容，并兼容旧缓存文件名。

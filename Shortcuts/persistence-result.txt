@@ -1,10 +1,16 @@
 test_all_readback_fields_checked (__main__.PersistenceTests.test_all_readback_fields_checked) ... ok
+test_canonical_wins_over_stale_legacy (__main__.PersistenceTests.test_canonical_wins_over_stale_legacy) ... ok
+test_each_exact_legacy_filename_across_three_cold_runs (__main__.PersistenceTests.test_each_exact_legacy_filename_across_three_cold_runs) ... ok
 test_existing_legacy_state_without_format_needs_no_import (__main__.PersistenceTests.test_existing_legacy_state_without_format_needs_no_import) ... ok
+test_explicit_name_survives_both_text_extension_models (__main__.PersistenceTests.test_explicit_name_survives_both_text_extension_models) ... ok
+test_invalid_legacy_is_rejected_before_network_or_use (__main__.PersistenceTests.test_invalid_legacy_is_rejected_before_network_or_use) ... ok
+test_old_matching_file_cannot_mask_failed_canonical_save (__main__.PersistenceTests.test_old_matching_file_cannot_mask_failed_canonical_save) ... ok
 test_only_generated_actions_and_no_secret_feedback (__main__.PersistenceTests.test_only_generated_actions_and_no_secret_feedback) ... ok
+test_shipped_e4_unnamed_json_fixture_reproduces_filename_miss (__main__.PersistenceTests.test_shipped_e4_unnamed_json_fixture_reproduces_filename_miss) ... ok
 test_three_cold_runs_share_files_only (__main__.PersistenceTests.test_three_cold_runs_share_files_only) ... ok
 test_wrong_path_or_provider_never_claims_success (__main__.PersistenceTests.test_wrong_path_or_provider_never_claims_success) ... ok
 
 ----------------------------------------------------------------------
-Ran 5 tests in 0.003s
+Ran 11 tests in 0.007s
 
 OK

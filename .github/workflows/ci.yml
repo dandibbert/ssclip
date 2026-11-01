@@ -32,6 +32,8 @@ jobs:
           python3 Shortcuts/validate_shortcuts.py
           python3 Shortcuts/test_persistence_actions.py
           swift scripts/test-shortcut-regex.swift
+          swift scripts/test-shortcut-file-contract.swift
+          cmp Resources/SSClip-Send.unsigned.shortcut Shortcuts/SSClip-Send.ssclip-template
 
       - name: Run tests
         run: swift test
@@ -70,6 +72,23 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent dist/SSClip.app SSClip-macOS.zip
           shasum -a 256 SSClip-macOS.zip > SSClip-macOS.zip.sha256
           shasum -a 256 -c SSClip-macOS.zip.sha256
+
+      - name: Prepare independently downloadable iPhone template
+        run: |
+          cp Shortcuts/SSClip-Send.ssclip-template SSClip-Send.ssclip-template
+          shasum -a 256 SSClip-Send.ssclip-template > SSClip-Send.ssclip-template.sha256
+          cmp SSClip-Send.ssclip-template dist/SSClip.app/Contents/Resources/SSClip-Send.unsigned.shortcut
+
+      - name: Upload independent iPhone template
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: SSClip-iPhone-Template
+          path: |
+            SSClip-Send.ssclip-template
+            SSClip-Send.ssclip-template.sha256
+            SSClip-build-commit.txt
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload build artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

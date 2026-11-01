@@ -15,16 +15,20 @@ FIXTURE={'format':'ssclip-connection','version':1,'server_url':'https://fixture.
 class File:
  path:str
  contents:str
+@dataclasses.dataclass
+class NamedContent:
+ name:str
+ contents:str
 class Machine:
- def __init__(self,files,save_fault=None):
-  self.files=files;self.save_fault=save_fault;self.env={};self.outputs={};self.last=None
-  self.imports=0;self.choosers=0;self.success=0;self.alerts=[];self.clipboard_reads=0;self.sends=0;self.read_paths=[]
+ def __init__(self,files,save_fault=None,text_extension_policy='replace',shortcut_input=None):
+  self.files=files;self.save_fault=save_fault;self.text_extension_policy=text_extension_policy;self.shortcut_input=shortcut_input;self.env={};self.outputs={};self.last=None
+  self.imports=0;self.choosers=0;self.success=0;self.alerts=[];self.clipboard_reads=0;self.sends=0;self.network_requests=0;self.read_paths=[]
   self.groups={}
   for i,a in enumerate(A):
    q=a.get('WFWorkflowActionParameters',{})
    if 'GroupingIdentifier'in q:self.groups.setdefault(q['GroupingIdentifier'],{})[q['WFControlFlowMode']]=i
  def text(self,x):
-  if isinstance(x,File):return x.contents
+  if isinstance(x,(File,NamedContent)):return x.contents
   if isinstance(x,dict):return json.dumps(x,ensure_ascii=False)
   if x is None:return ''
   return str(x)
@@ -35,7 +39,7 @@ class Machine:
   t=x.get('Type')
   if t=='Variable':v=self.env.get(x['VariableName'])
   elif t=='ActionOutput':v=self.outputs[x['OutputUUID']]
-  elif t=='ExtensionInput':v=None
+  elif t=='ExtensionInput':v=self.shortcut_input
   elif 'string'in x:
    v=x['string']
    for span,tok in sorted(x.get('attachmentsByRange',{}).items(),key=lambda z:int(z[0].split(',')[0][1:]),reverse=True):
@@ -87,8 +91,15 @@ class Machine:
    elif k=='documentpicker.open':
     path=self.path(q['WFGetFilePath']);self.read_paths.append(path)
     if path in self.files:out=File(path[1],self.files[path])
+   elif k=='setitemname':
+    assert q['WFDontIncludeFileExtension'] is False,'Must name full file, including extension'
+    out=NamedContent(self.val(q['WFName']),self.text(self.val(q['WFInput'])))
    elif k=='documentpicker.save':
-    path=self.path(q['WFFileDestinationPath']);body=self.text(self.val(q['WFInput']))
+    item=self.val(q['WFInput']);path=self.path(q['WFFileDestinationPath']);body=self.text(item)
+    if isinstance(item,NamedContent):
+     assert item.name==path[1].rsplit('/',1)[-1],'Explicit name must agree with save subpath'
+    elif self.text_extension_policy=='replace':path=(path[0],path[1].rsplit('.',1)[0]+'.txt')
+    elif self.text_extension_policy=='append' and not path[1].endswith('.txt'):path=(path[0],path[1]+'.txt')
     if self.save_fault=='wrong-provider':path=('OtherProvider',path[1])
     elif self.save_fault=='wrong-path':path=(path[0],'Elsewhere/state.json')
     elif isinstance(self.save_fault,tuple):
@@ -105,6 +116,7 @@ class Machine:
     u=urlsplit(self.val(q['WFURL']));out=u.hostname if q['WFURLComponent']=='Host'else u.port
    elif k=='file.select':self.imports+=1;out=File('fixture.json',json.dumps(FIXTURE))
    elif k=='downloadurl':
+    self.network_requests+=1
     url=self.val(q['WFURL'])
     if url.endswith('/register'):out={'device':{'id':'ios-shortcut-sender'}}
     elif url.endswith('/devices'):out={'devices':[]}
@@ -112,9 +124,9 @@ class Machine:
    elif k=='alert':
     message=self.text(self.val(q['WFAlertActionMessage']));assert FIXTURE['api_key'] not in message
     self.alerts.append(q.get('WFAlertActionTitle',''))
-    if '已保存并读回校验'in message:self.success+=1
+    if message=='连接已保存':self.success+=1
    elif k=='choosefromlist':
-    assert q['WFChooseFromListActionPrompt']=='选择本次接收设备；取消不会发送','Unexpected recovery selector'
+    assert q['WFChooseFromListActionPrompt']=='选择接收 Mac','Unexpected recovery selector'
     self.choosers+=1;return 'selector'
    elif k=='getclipboard':self.clipboard_reads+=1;raise AssertionError('Should stop at chooser, not read clipboard')
    elif k=='exit':return 'exit'
@@ -128,11 +140,11 @@ class PersistenceTests(unittest.TestCase):
   files={};runs=[Machine(files)for _ in range(3)]
   self.assertEqual([m.run()for m in runs],['exit','selector','selector'])
   self.assertEqual([m.imports for m in runs],[1,0,0]);self.assertEqual([m.choosers for m in runs],[0,1,1])
-  self.assertEqual([m.success for m in runs],[1,0,0]);self.assertEqual(len(set(runs[0].read_paths)),1)
-  saved=json.loads(files[('Shortcuts','SSClip/connection-state.json')]);self.assertEqual(saved,FIXTURE)
+  self.assertEqual([m.success for m in runs],[1,0,0]);self.assertEqual(runs[0].read_paths[-1],('Shortcuts','SSClip/connection-state.txt'))
+  saved=json.loads(files[('Shortcuts','SSClip/connection-state.txt')]);self.assertEqual(saved,FIXTURE)
  def test_existing_legacy_state_without_format_needs_no_import(self):
   old=dict(FIXTURE);old.pop('format');old.update(target_id='obsolete',target_name='Old Mac')
-  m=Machine({('Shortcuts','SSClip/connection-state.json'):json.dumps(old)});self.assertEqual(m.run(),'selector');self.assertEqual(m.imports,0)
+  m=Machine({('Shortcuts','SSClip/connection-state.txt'):json.dumps(old)});self.assertEqual(m.run(),'selector');self.assertEqual(m.imports,0)
  def test_wrong_path_or_provider_never_claims_success(self):
   for fault in ['wrong-path','wrong-provider']:
    with self.subTest(fault=fault):
@@ -142,6 +154,65 @@ class PersistenceTests(unittest.TestCase):
    with self.subTest(field=field):
     m=Machine({},(field,value));self.assertEqual(m.run(),'exit');self.assertEqual(m.success,0);self.assertIn('保存校验失败',m.alerts)
  def test_only_generated_actions_and_no_secret_feedback(self):
-  self.assertEqual(len([a for a in A if a['WFWorkflowActionIdentifier']=='is.workflow.actions.documentpicker.open']),2)
-  self.assertEqual(len([a for a in A if a['WFWorkflowActionIdentifier']=='is.workflow.actions.count' and a['WFWorkflowActionParameters'].get('WFCountType')=='Items']),2)
+  self.assertEqual(len([a for a in A if a['WFWorkflowActionIdentifier']=='is.workflow.actions.documentpicker.open']),4)
+  self.assertEqual(len([a for a in A if a['WFWorkflowActionIdentifier']=='is.workflow.actions.count' and a['WFWorkflowActionParameters'].get('WFCountType')=='Items']),4)
+ def test_each_exact_legacy_filename_across_three_cold_runs(self):
+  for name in ['connection-state.txt','connection-state.json.txt','connection-state.json']:
+   with self.subTest(name=name):
+    old=dict(FIXTURE);old.pop('format');path=('Shortcuts','SSClip/'+name);files={path:json.dumps(old)};before=dict(files)
+    runs=[Machine(files)for _ in range(3)]
+    self.assertEqual([m.run()for m in runs],['selector']*3)
+    self.assertEqual(sum(m.imports for m in runs),0);self.assertEqual(files,before,'No automatic legacy migration or deletion')
+ def test_canonical_wins_over_stale_legacy(self):
+  stale=dict(FIXTURE,api_key='b'*64)
+  files={('Shortcuts','SSClip/connection-state.txt'):json.dumps(FIXTURE),('Shortcuts','SSClip/connection-state.json'):json.dumps(stale)}
+  m=Machine(files);self.assertEqual(m.run(),'selector');self.assertEqual(m.env['apiKey'],FIXTURE['api_key']);self.assertEqual(len(m.read_paths),1)
+ def test_old_matching_file_cannot_mask_failed_canonical_save(self):
+  for legacy in ['connection-state.json.txt','connection-state.json']:
+   files={('Shortcuts','SSClip/'+legacy):json.dumps(FIXTURE)};before=dict(files)
+   m=Machine(files,'wrong-path',shortcut_input='SSCLIP_REIMPORT_V2')
+   self.assertEqual(m.run(),'exit');self.assertEqual(m.success,0);self.assertIn('保存校验失败',m.alerts)
+   self.assertEqual(m.read_paths[-1],('Shortcuts','SSClip/connection-state.txt'))
+   self.assertEqual(files[('Shortcuts','SSClip/'+legacy)],before[('Shortcuts','SSClip/'+legacy)])
+ def test_explicit_name_survives_both_text_extension_models(self):
+  for policy in ['replace','append']:
+   files={};runs=[Machine(files,text_extension_policy=policy)for _ in range(3)]
+   self.assertEqual([m.run()for m in runs],['exit','selector','selector'])
+   self.assertEqual(set(files),{('Shortcuts','SSClip/connection-state.txt')})
+   self.assertEqual([m.imports for m in runs],[1,0,0])
+ def test_invalid_legacy_is_rejected_before_network_or_use(self):
+  for field,value in [('version',99),('server_url','http://not-https.invalid'),('api_key','bad')]:
+   files={('Shortcuts','SSClip/connection-state.json'):json.dumps(dict(FIXTURE,**{field:value}))}
+   m=Machine(files)
+   # A recovery selector is expected, never the normal receiver selector.
+   with self.assertRaisesRegex(AssertionError,'Unexpected recovery selector'):m.run()
+   self.assertEqual(m.imports,0);self.assertEqual(m.choosers,0);self.assertEqual(m.success,0);self.assertEqual(m.network_requests,0)
+ def test_shipped_e4_unnamed_json_fixture_reproduces_filename_miss(self):
+  fixture=json.loads((ROOT/'fixtures'/'e4a4182c-unnamed-json-state.json').read_text())
+  self.assertEqual(fixture['source_commit'],'e4a4182cf3d1938cedcacc93860ecd43799dceec')
+  self.assertEqual(fixture['source_resource_sha256'],'921166843c56bd0f5771cd3099d817b6cb59ab5a002835fbb712acd0749789c0')
+  self.assertEqual(fixture['set_name_action_count'],0)
+  old_read=fixture['loader']['WFWorkflowActionParameters']['WFGetFilePath'].lstrip('/')
+  old_save=fixture['save']['WFWorkflowActionParameters']
+  self.assertEqual(old_read,'SSClip/connection-state.json')
+  self.assertEqual(old_save['WFFileDestinationPath'],'SSClip/connection-state.json')
+  conversion=fixture['text_conversion'];binding=fixture['text_binding']['WFWorkflowActionParameters']
+  self.assertEqual(conversion['WFWorkflowActionIdentifier'],'is.workflow.actions.detect.text')
+  self.assertEqual(binding['WFInput']['Value']['OutputUUID'],conversion['WFWorkflowActionParameters']['UUID'])
+  self.assertEqual(old_save['WFInput']['Value']['VariableName'],binding['WFVariableName'])
+  for policy,actual_name in [('replace','SSClip/connection-state.txt'),('append','SSClip/connection-state.json.txt')]:
+   files={};imports=0
+   for _ in range(3):
+    self.assertNotIn(('Shortcuts',old_read),files)
+    imports+=1
+    # Resolve the extracted real native File<-Text producer chain with fake state.
+    m=Machine(files,text_extension_policy=policy);m.env['newState']=dict(FIXTURE)
+    raw=m.text(m.val(conversion['WFWorkflowActionParameters']['WFInput']))
+    m.outputs[conversion['WFWorkflowActionParameters']['UUID']]=raw
+    m.env[binding['WFVariableName']]=m.val(binding['WFInput'])
+    value=m.val(old_save['WFInput']);self.assertIsInstance(value,str)
+    path=old_save['WFFileDestinationPath']
+    actual=path.rsplit('.',1)[0]+'.txt' if policy=='replace'else path+'.txt'
+    files[('Shortcuts',actual)]=value
+   self.assertEqual(imports,3);self.assertEqual(set(files),{('Shortcuts',actual_name)})
 if __name__=='__main__':unittest.main(verbosity=2)

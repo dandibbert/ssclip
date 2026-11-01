@@ -117,23 +117,46 @@ final class IOSShortcutExporter: ObservableObject {
         self.signer = signer ?? { try await OfficialShortcutSigner.sign(input: $0, output: $1) }
     }
 
-    func chooseDestination() {
+    /// Imports data only. Signing never executes the selected workflow.
+    func chooseDownloadedTemplate() {
+        guard !isBusy else { return }
+        let panel = NSOpenPanel()
+        panel.title = "选择下载的 SSClip 快捷指令模板"
+        panel.message = "请选择可信来源的 SSClip 模板（.ssclip-template），不是连接 JSON。"
+        panel.allowedContentTypes = [UTType(filenameExtension: "ssclip-template") ?? .data, UTType(filenameExtension: "shortcut") ?? .data]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, let source = panel.url else { return }
+        chooseDestination(source: source)
+    }
+
+    static func validDownloadedTemplate(_ data: Data) -> Bool {
+        guard !data.isEmpty, data.count <= 2 * 1024 * 1024,
+              let value = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let root = value as? [String: Any],
+              let actions = root["WFWorkflowActions"] as? [[String: Any]],
+              !actions.isEmpty, actions.count <= 2000,
+              actions.allSatisfy({ ($0["WFWorkflowActionIdentifier"] as? String)?.hasPrefix("is.workflow.actions.") == true }) else { return false }
+        return true
+    }
+
+    func chooseDestination(source: URL? = nil) {
         guard !isBusy else { return }
         let panel = NSSavePanel()
         panel.title = "生成 iPhone 快捷指令"
-        panel.message = "由这台 Mac 的系统快捷指令工具签名。请先登录 iCloud；生成的文件不包含你的 API Key。"
+        panel.message = "使用本机 Apple 工具签名，需要登录 iCloud。"
         panel.nameFieldStringValue = filename
         panel.allowedContentTypes = [UTType(filenameExtension: "shortcut") ?? .data]
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let destination = panel.url else { return }
-        beginExport(to: destination)
+        beginExport(to: destination, source: source)
     }
 
-    func beginExport(to destination: URL) {
+    func beginExport(to destination: URL, source: URL? = nil) {
         guard !isBusy else { return }
         // Set busy before scheduling so repeated clicks cannot create two signers.
         isBusy = true
-        operation = Task { [weak self] in await self?.performExport(to: destination) }
+        operation = Task { [weak self] in await self?.performExport(to: destination, source: source) }
     }
 
     func cancel() {
@@ -148,20 +171,41 @@ final class IOSShortcutExporter: ObservableObject {
         return dictionary["WFWorkflowActions"] != nil
     }
 
-    private func performExport(to destination: URL) async {
+    private func performExport(to destination: URL, source: URL?) async {
         defer { isBusy = false; operation = nil }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("SSClip-sign-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
+        let access = source?.startAccessingSecurityScopedResource() ?? false
+        defer { if access { source?.stopAccessingSecurityScopedResource() } }
         do {
             try Task.checkCancellation()
-            let resource = templateURL()
+            if let bundled = templateURL(), bundled.resolvingSymlinksInPath().standardizedFileURL == destination.resolvingSymlinksInPath().standardizedFileURL {
+                status = "请选择新的输出位置，不能覆盖应用内原始模板。"; return
+            }
+            let resource = source ?? templateURL()
             guard let input = resource, FileManager.default.fileExists(atPath: input.path) else {
                 status = "应用内快捷指令模板缺失，请重新安装完整 SSClip 测试包。"; return
             }
             guard input.resolvingSymlinksInPath().standardizedFileURL != destination.resolvingSymlinksInPath().standardizedFileURL else {
                 status = "请选择新的输出位置，不能覆盖应用内原始模板。"; return
             }
-            let original = try Data(contentsOf: input)
+            if source != nil {
+                let values = try input.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+                guard values.isRegularFile == true, let size = values.fileSize, size > 0, size <= 2 * 1024 * 1024 else {
+                    status = "模板文件无效或超过 2 MiB，未签名。"; return
+                }
+            }
+            let original: Data
+            if source != nil {
+                let handle = try FileHandle(forReadingFrom: input)
+                defer { try? handle.close() }
+                original = try handle.read(upToCount: 2 * 1024 * 1024 + 1) ?? Data()
+            } else {
+                original = try Data(contentsOf: input)
+            }
+            if source != nil && !Self.validDownloadedTemplate(original) {
+                status = "请选择下载的快捷指令模板，不是连接 JSON 或安装文件。"; return
+            }
             guard !original.isEmpty, original.count <= 20 * 1024 * 1024 else {
                 status = "应用内快捷指令模板无效，未生成文件。"; return
             }
@@ -178,7 +222,7 @@ final class IOSShortcutExporter: ObservableObject {
             try Task.checkCancellation()
             guard result.exitCode == 0 else {
                 if result.diagnostic.localizedCaseInsensitiveContains("signed into iCloud") || result.diagnostic.localizedCaseInsensitiveContains("sign in to iCloud") {
-                    status = "尚未生成：请先在这台 Mac 登录 iCloud，再点“生成 iPhone 快捷指令”。不需要向 SSClip 提供 Apple 账号或密码。"
+                    status = "请先在这台 Mac 登录 iCloud，再重试签名。"
                 } else {
                     status = "Apple 官方签名未成功，未保存安装文件。请确认已登录 iCloud 且网络可用后重试。"
                 }
@@ -194,7 +238,7 @@ final class IOSShortcutExporter: ObservableObject {
             try Task.checkCancellation()
             // Atomic write keeps an existing destination intact on signing or write failure.
             try signed.write(to: destination, options: .atomic)
-            status = "已生成签名快捷指令。请 AirDrop 到 iPhone 并替换或安装“SSClip发送”；首次只导入连接 JSON，以后每次发送选择接收设备。旧版连接配置会继续使用。"
+            status = "已生成，AirDrop 到 iPhone 并替换“SSClip发送”。"
         } catch is CancellationError {
             status = "已取消生成，原文件未改变。"
         } catch ShortcutSigningFailure.timedOut {

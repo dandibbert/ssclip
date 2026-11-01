@@ -299,7 +299,7 @@ final class RelayController: ObservableObject {
                         requestUnchanged: pasteboard.changeCount == changeCount,
                         batch: model?.isBatchMode ?? true, latest: message.id == valid.last?.id)
                     let copied = canCopy && (model?.receiveRelayText(message.text) ?? false)
-                    status = copied ? "已接收并复制；尚未粘贴" : "已收到，暂存同步收件箱（未覆盖剪贴板）"
+                    status = copied ? "已复制到剪贴板" : "已收到，存入收件箱"
                     received += 1
                 }
                 let recovered = failures > 0
@@ -355,8 +355,8 @@ final class RelayController: ObservableObject {
                 guard current == self.generation, !Task.isCancelled else { return }
                 let object = try? JSONSerialization.jsonObject(with: response) as? [String: Any]
                 if object?["delivery"] as? String == "submitted" {
-                    self.sendFeedback("Bark 已接受推送 → \(destinationName)；不代表手机已收到或复制")
-                } else { self.sendFeedback("服务器已接收 → \(destinationName)；不代表对方已复制") }
+                    self.sendFeedback("Bark 已接受 → \(destinationName)")
+                } else { self.sendFeedback("已提交 → \(destinationName)") }
             } catch {
                 guard current == self.generation, !Task.isCancelled else { return }
                 if case Failure.service(let code) = error, let message = RelayServiceError.message(for: code) {
@@ -371,7 +371,7 @@ final class RelayController: ObservableObject {
 
     func copyReceipt(_ receipt: RelayReceipt) {
         guard model?.isBatchMode == false else { status = "批量模式中暂不复制；请先关闭批量模式"; return }
-        status = model?.receiveRelayText(receipt.text) == true ? "已从收件箱复制；尚未粘贴" : "复制失败，原记录仍在收件箱"
+        status = model?.receiveRelayText(receipt.text) == true ? "已复制到剪贴板" : "复制失败，原记录仍在收件箱"
     }
     func deleteReceipt(_ receipt: RelayReceipt) {
         guard let index = inbox.firstIndex(where: { $0.id == receipt.id && $0.scope == receipt.scope }) else { return }

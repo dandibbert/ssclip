@@ -16,6 +16,7 @@ subprocess.run([sys.executable,str(ROOT/'validate_shortcuts.py')],check=True)
 subprocess.run([sys.executable,str(ROOT/'test_persistence_actions.py')],check=True)
 for source,output in [('SSClip发送_unsigned.shortcut','SSClip-Send.unsigned.shortcut')]:
  shutil.copyfile(ROOT/source,ROOT/output)
+ shutil.copyfile(ROOT/source,ROOT/"SSClip-Send.ssclip-template")
  resources=ROOT.parent/"Resources"
  if resources.is_dir(): shutil.copyfile(ROOT/source,resources/output)
 print('Unsigned resources generated. Apple signing and iOS runtime remain separate required checks.')

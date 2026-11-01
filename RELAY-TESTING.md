@@ -42,7 +42,7 @@ CI 对精确提交在 macOS Apple Silicon 运行完整 Swift 测试、release �
 1. 更新 Mac 测试版，打开 SSClip → 设置 → 跨设备同步 → iPhone 设置，点击“生成 iPhone 快捷指令”。这台 Mac 必须已经登录 iCloud；按钮用系统 `/usr/bin/shortcuts sign --mode anyone`，不会索要或代填 Apple 账号。
 2. 保存生成的 **SSClip发送.shortcut**，AirDrop 给 iPhone 并替换同名旧版。只需这一条快捷指令，旧“SSClip设置”可以删除。请保留主快捷指令名称。
 3. 没有连接时，首次只导入连接 JSON 并确认服务地址，不发送剪贴板。已经完成旧版设置的 iPhone 会沿用 URL 和 Key，无需重新导入或换 Key；忽略旧默认目标。
-4. 此后复制纯文本，运行“SSClip发送”，每次从最新设备列表选择这次接收的设备（Mac 或已配置 Bark 的 iPhone/iPad）；取消不发送。需要换连接时，在同一个列表选择“更换连接配置…”，该操作只配置不发送。Mac 自身的默认发送目标和全局快捷键行为不变。
+4. 此后复制纯文本，运行“SSClip发送”，每次从最新设备列表选择这次接收的 Mac；取消不发送。需要换连接时，在同一个列表选择“更换连接配置…”，该操作只配置不发送。Mac 自身的默认发送目标和全局快捷键行为不变。
 
 模板使用配置中的 HTTPS 根地址，支持复用兼容的自建服务；原生快捷指令 HTTP 的重定向行为未在 iPhone 实测，不声称像 Mac URLSession 一样禁用重定向。只导入本人可信管理端配置。手机配置明文保存在本人 iCloud Drive/Shortcuts/SSClip，不分享该目录。同账号手机可有意共享连接配置，每次自行选择目标；它们使用统一的“iOS 快捷指令”逻辑发送端，不区分来自哪台实体手机。旧 phone-id 文件不再读取，也不会主动删除。每台 iPhone/iPad 的接收身份由管理端分别配置的 Bark 目标区分。
 
@@ -58,10 +58,20 @@ CI 对精确提交在 macOS Apple Silicon 运行完整 Swift 测试、release �
 
 建议使用应用按钮或备用脚本，它们会以正确中文文件名暂存输入来保持导入名；直接命令后仍需确认 iPhone 上的主名称为“SSClip发送”。`Resources/*.unsigned.shortcut` 是未签名模板，不能直接当作安装文件打开。
 
-### 自动读取连接配置修正
+### 缓存文件扩展名修复
 
-用户反馈缓存文件存在但每次仍进入导入。当前修订改用实际原生导出示例中的 Shortcuts 根相对 Get File 参数，并以 Count Items 判存在，显式转换 File→Text→Dictionary；保留原 `connection-state.json`，不删除或迁移已存配置。新保存必须通过同一读取动作重新取回，并在内部核对 format/version/server_url/api_key 后才报告成功。错误只显示类别，不显示配置值。已有无 format 的旧缓存仍可读取。
+用户实机确认：旧版把未命名 Text 保存为实际 `.txt`，却读取 `.json`，所以每次重新要求导入。这不是目录配置问题。现在先 Set Name 为完整 `connection-state.txt`（保留扩展名），再按同名保存 JSON 文本。
 
-CI 新增直接解释生成 plist 的三次冷启动模型及保存路径/字段故障检查：第一次配置，第二、第三次复用文件进入设备选择。它不是 iPhone 或 iCloud File Provider 实测，不能作为平台问题已解决的证据；用户需确认新版连续运行不再要求导入。
+启动精确查找 `connection-state.txt` → `connection-state.json.txt` → `connection-state.json`。只在文件不存在时尝试下一候选；已找到但无效的配置不会静默回退旧 Key。已有文件不删除、不改名；原 Key 无需重置。保存后的读回只使用规范 `.txt`，四字段一致才报告“连接已保存”。
 
-Bark 发送采用单独的 30 秒 request / 35 秒 resource 总预算，覆盖后台 DNS 与推送检查；普通请求保持 12 / 15 秒。超时仍不自动重发，结果不明应先检查目标设备。
+回归使用旧交付的真实文件动作 fixture，模拟未命名 Text 的默认扩展名替换/追加，重现旧版找不到文件；新版明确命名及三个旧名兼容连续三次冷启动。测试保留扩展名差异，不把所有文件路径归并成同一名字。
+
+### 单独更新 iPhone 快捷指令
+
+本次 Mac 版本增加“更新 iPhone 快捷指令…”入口。安装这个版本一次后，后续只下载 `SSClip-Send.ssclip-template`，在此入口选择文件，再把生成的已签名“SSClip发送.shortcut”AirDrop 到 iPhone 替换；无需为每次模板更新重装 Mac App。`.ssclip-template` 是模板，不能直接在 iPhone 安装。内置生成入口仍可用。
+
+模板：[独立下载](https://github.com/dandibbert/ssclip/raw/refs/heads/codex/ssclip-relay-test/Shortcuts/SSClip-Send.ssclip-template)。源文件：`Shortcuts/SSClip-send.cherri`。CI 另提供独立模板 artifact、SHA256 与提交号，且校验其字节与 App 内模板相同。App 只验证文件结构，不能认证任意文件的发布者；只使用此仓库或管理端提供的文件。选择、取消和签名均不运行模板动作，也不覆盖模板源文件。
+
+日常 iPhone 只选择 Mac，不列自己的 Bark 手机；Mac 可选其他 Mac 或多个 Bark iOS 接收端。状态用“已提交”“Bark 已接受”，不虚称对端已复制。详细安全含义在折叠帮助中。
+
+Bark 发送保持单独 30 秒 request / 35 秒 resource 总预算，普通请求保持 12 / 15 秒。结果不明不自动重发。

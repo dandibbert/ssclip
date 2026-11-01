@@ -53,3 +53,12 @@
 ## 反复导入修订的真实导出依据
 来源：https://gist.github.com/extratone/f0debc4ccc32ee1349be4e8632c2367b （Apple Frames 4 原生导出分析）。动作136及JSON4314–4318为documentpicker.open，仅WFGetFilePath=/Frames/NewFrames.json、WFFileErrorIfNotFound=false、UUID；紧随动作137设变量、138 Count Items、139条件。此模式支持本候选的modern loader + Count Items设计，但不证明用户设备已修复。用户已证实.json存在，故保留文件，不采用扩展名迁移推测。
 新候选513actions、3014结构检查，并新增实际生成动作的三冷启/保存读回小解释器5测试组。新格式/版本/地址/key四项读回检查且无值反馈。
+
+## 最终确认：实际 .txt 与旧 .json loader 不一致
+用户后续实机明确文件实际后缀为 .txt，前述“exact .json存在”的初步理解已被纠正，不能再归因为未知folder根映射。最终canonical使用connection-state.txt，保留现代原生路径参数，不引入新folder/bookmark。仅精确兼容旧.json.txt/.json文件，读回只canonical；不删除旧文件。
+
+Set Name 依据：Cherri actions/basic.cherri 的原生 setitemname(WFInput,WFName,WFDontIncludeFileExtension)，以及 https://docs.scpl.dev/actions/setname 提取的WFSetItemNameAction定义。实际生成字段WFName=connection-state.txt，WFDontIncludeFileExtension=false显式存在；save引用该命名输出。提取schema不是当前iOS运行证明。
+
+最终531actions、3120结构检查、11持久化测试组。负fixture来自实际e4a4182c交付resource，记录完整commit与resourceSHA；不含任何用户配置。实际原生提供器与iCloud行为仍需手机验证，模型只明确测试文件名策略与生成动作控制流。
+
+最终UX收敛：用户明确iOS只发Mac，故撤回此前Bark目标扩展。只macos并排除can_receive:false；ID仍用于不歧义选择，但单独choiceNameMap用于简短“已提交→名称”。设置成功短“连接已保存”，不声称已复制。最终526actions、3105结构检查、11持久化测试组。
