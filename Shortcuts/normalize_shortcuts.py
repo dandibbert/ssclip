@@ -23,4 +23,8 @@ for filename in ['SSClip发送_unsigned.shortcut','SSClip设置_unsigned.shortcu
   if old:seen.add(old)
   if a['WFWorkflowActionIdentifier']=='is.workflow.actions.base64encode':
    q.pop('input',None);q['WFEncodeMode']='Encode'
+ # Named variables resolve by VariableName; Cherri adds stale output metadata.
+ for node in walk(p):
+  if isinstance(node,dict) and node.get('Type')=='Variable':
+   node.pop('OutputUUID',None);node.pop('OutputName',None)
  path.write_bytes(plistlib.dumps(p,fmt=plistlib.FMT_XML,sort_keys=True))

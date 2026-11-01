@@ -27,6 +27,11 @@ jobs:
           swift --version
           test "$(uname -m)" = arm64
 
+      - name: Verify bundled shortcut semantics and native regex
+        run: |
+          python3 Shortcuts/validate_shortcuts.py
+          swift scripts/test-shortcut-regex.swift
+
       - name: Run tests
         run: swift test
 

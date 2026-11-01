@@ -8,7 +8,7 @@ if 'v2.3.0' not in version:raise SystemExit('Use pinned Cherri v2.3.0')
 for source,output in [('SSClip-send.cherri','SSClip发送_unsigned.shortcut'),('SSClip-settings.cherri','SSClip设置_unsigned.shortcut')]:
  dest=ROOT/output
  if dest.exists():dest.unlink()
- result=subprocess.run([compiler,str(ROOT/source),'--skip-sign','--derive-uuids','--no-ansi'],cwd=ROOT,text=True,capture_output=True)
+ result=subprocess.run([compiler,str(ROOT/source),'--skip-sign','--no-ansi'],cwd=ROOT,text=True,capture_output=True)
  if result.returncode or 'Error:' in result.stdout+result.stderr or not dest.exists():
   raise SystemExit('Compilation failed: '+result.stdout+result.stderr)
 subprocess.run([sys.executable,str(ROOT/'normalize_shortcuts.py')],check=True)

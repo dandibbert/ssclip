@@ -31,4 +31,9 @@
 - 所有 `ActionOutput` 引用的 UUID 都存在；无引用的重复控制流输出 UUID 已规范化为不同 UUID，没有修改有引用的 ID。
 - 主/设置均为原生 `is.workflow.actions.*`，未引入 Scriptable、第三方 App 或 Safari JavaScript。
 
-**仍待实机验证：** iOS 对 legacy documentpicker 存储参数的迁移/识别，iCloud 路径与重复建目录，Get Type 的本地化标签，原生 Base64 对文本的 UTF-8 编码，系统文件/网络/剪贴板许可交互，以及官方签名后的安装和端到端收发。编译与 727 项静态检查不能替代这些结果。
+**仍待实机验证：** iOS 对 legacy documentpicker 存储参数的迁移/识别，iCloud 路径与重复建目录，Get Type 的本地化标签，系统文件/网络/剪贴板许可交互，以及官方签名后的安装和端到端收发。编译与结构/生成字典回归检查不能替代这些结果。
+
+## 实机反馈后的修订（2026-11-01）
+用户在 iPhone 选择合法 JSON 被误报“不是连接配置”。检查生成 plist 发现 `dict['key']` 被编译成对象属性读取；现在全部使用 `is.workflow.actions.getvalueforkey`，明确 WFInput/WFDictionaryKey/Value。另发现 `--derive-uuids` 使独立控制流重用 GroupingIdentifier，已禁用并验证完整栈配对。复合减法变量右值会错误赋值，故按简化原则删除两套字节预检，依赖服务端长度限制。正则实际字节检查没有发现双转义错误。新模板需再次官方签名并在 iPhone 试运行；不能把此次生成结构测试声称为实机已修复验证。
+
+用户后续已完成旧版 Mac 官方签名及 iPhone 安装，并运行到配置校验失败，故先前“签名/安装未验证”仅描述开发环境当时状况。修复版仍待重新签名与实机重试，收发链路尚无通过证据。

@@ -16,10 +16,10 @@ def walk(x):
  elif isinstance(x,list):
   for v in x:yield from walk(v)
 
-def resource(chinese, ascii):
- for path in [ROOT/chinese, ROOT/ascii, ROOT.parent/'Resources'/ascii]:
+def resource(chinese, ascii_name):
+ for path in [ROOT/chinese, ROOT/ascii_name, ROOT.parent/'Resources'/ascii_name]:
   if path.exists(): return path
- raise FileNotFoundError(ascii)
+ raise FileNotFoundError(ascii_name)
 main=plistlib.loads(resource('SSClip发送_unsigned.shortcut','SSClip-Send.unsigned.shortcut').read_bytes())
 helper=plistlib.loads(resource('SSClip设置_unsigned.shortcut','SSClip-Settings.unsigned.shortcut').read_bytes())
 for name,p in [('main',main),('helper',helper)]:
@@ -90,17 +90,79 @@ for value in ['http://example.com','https://user:pass@example.com','https://user
  except ValueError:valid=False
  check(not valid,'Expected malformed or unsupported origin rejection')
 check('if @needsConfig == 1 {\n confirm("将连接：{@server}' in source,'Actual target origin explicitly confirmed before first use')
-check('@configLength = @config64Length / 4' in source and '@configLength -= @configPadding' in source,'Config limit uses UTF-8 byte calculation too')
-# Verify the exact native base64-length arithmetic for ASCII/Chinese/emoji/multiline/quotes/backslash.
-for sample in ['','a','ab','abc','中文😀\n"quote"\\tab\t','a'*32768,'a'*32769,'😀'*8192,'😀'*8193]:
- encoded=base64.encodebytes(sample.encode()).decode()
- compact=re.sub(r'\s','',encoded)
- padding=2 if compact.endswith('==') else 1 if compact.endswith('=') else 0
- measured=len(compact)/4*3-padding
- check(measured==len(sample.encode('utf-8')),'UTF-8 length math mismatch')
- obj={'text':sample};check(json.loads(json.dumps(obj))['text']==sample,'JSON semantic roundtrip')
 h=[a for a in helper['WFWorkflowActions'] if a['WFWorkflowActionIdentifier']=='is.workflow.actions.runworkflow']
 check(len(h)==1 and h[0]['WFWorkflowActionParameters']['WFWorkflowName']=='SSClip发送','Helper invokes exact main name')
 check(not any(a['WFWorkflowActionIdentifier']=='is.workflow.actions.getclipboard' for a in helper['WFWorkflowActions']),'Helper does not read clipboard')
-print(f'PASS: {checks} structural/privacy/math checks; {len(acts)} main actions, {len(helper["WFWorkflowActions"])} helper actions. iOS runtime and Apple signing NOT verified by these checks.')
+# Regression for the first real-iPhone failure: dictionary brackets compiled as
+# object-property aggrandizements; derived UUIDs also aliased independent If groups.
+for name,p in [('main',main),('helper',helper)]:
+ stack=[]; opened=set()
+ for a in p['WFWorkflowActions']:
+  q=a.get('WFWorkflowActionParameters',{})
+  if 'GroupingIdentifier' not in q: continue
+  group=q['GroupingIdentifier'];mode=q['WFControlFlowMode'];kind=a['WFWorkflowActionIdentifier']
+  if mode==0:
+   check(group not in opened,f'{name}: reused independent control-flow group')
+   opened.add(group);stack.append((group,kind))
+  else:
+   check(bool(stack) and stack[-1]==(group,kind),f'{name}: improperly nested control-flow boundary')
+   if mode==2:stack.pop()
+   else:check(mode==1,f'{name}: unknown control-flow mode')
+ check(not stack,f'{name}: unclosed control-flow group')
+ for node in walk(p):
+  if isinstance(node,dict):
+   check(node.get('Type')!='WFPropertyVariableAggrandizement','Never confuse object properties with dictionary keys')
+   if node.get('Type')=='Variable':check('OutputUUID' not in node,'Named variable must not contain stale output UUID')
+
+# A bounded interpreter of the ACTUAL emitted native dictionary/text/set-variable
+# actions. This is a serialization regression test, NOT an iOS runtime emulator.
+def read_token(token,env,outputs):
+ value=token.get('Value',token)
+ if value.get('Type')=='Variable':return env[value['VariableName']]
+ if value.get('Type')=='ActionOutput':return outputs[value['OutputUUID']]
+ raise AssertionError('Unexpected token shape')
+def run_dictionary_pipeline(start_variable,input_value,end_variable):
+ env={start_variable:input_value};outputs={};active=False
+ for a in acts:
+  kind=a['WFWorkflowActionIdentifier'];q=a.get('WFWorkflowActionParameters',{})
+  if kind=='is.workflow.actions.getvalueforkey':
+   token=q['WFInput']['Value']
+   if token.get('VariableName') not in env:continue
+   check(q['WFGetDictionaryValueType']=='Value','Explicit dictionary value operation')
+   key=q['WFDictionaryKey']
+   if not isinstance(key,str):continue
+   obj=read_token(q['WFInput'],env,outputs)
+   outputs[q['UUID']]=obj.get(key,'');active=True
+  elif active and kind=='is.workflow.actions.detect.text':
+   try:value=read_token(q['WFInput'],env,outputs)
+   except KeyError:continue
+   outputs[q['UUID']]=str(value)
+  elif active and kind=='is.workflow.actions.setvariable':
+   try:value=read_token(q['WFInput'],env,outputs)
+   except (KeyError,AssertionError):continue
+   env[q['WFVariableName']]=value
+   if q['WFVariableName']==end_variable:return env
+ raise AssertionError('Expected native dictionary pipeline not found')
+fixture=json.loads('{"format":"ssclip-connection","version":1,"server_url":"https://example.com","api_key":"'+'a'*64+'"}')
+values=run_dictionary_pipeline('config',fixture,'apiKey')
+for key in ['format','version']:
+ check(values[key]==fixture[key],'Generated config field lookup must preserve value')
+check(values['server']==fixture['server_url'] and values['apiKey']==fixture['api_key'],'Generated config origin/key lookup')
+for bad in [{},dict(fixture,format='wrong')]:
+ check(run_dictionary_pipeline('config',bad,'apiKey')['format']!='ssclip-connection','Bad config must fail format gate')
+missing=run_dictionary_pipeline('config',{},'apiKey')
+check(missing['format']=='' and missing['version']=='','Missing metadata remains distinguishable from mismatch')
+check(run_dictionary_pipeline('config',dict(fixture,version=2),'apiKey')['version']==2,'Unsupported version preserves value for rejection')
+check('if !@format {' in source and 'if !@version {' in source,'Missing metadata has specific safe feedback')
+check(run_dictionary_pipeline('registeredDevice',{'id':'ios-fixture-id'},'registeredID')['registeredID']=='ios-fixture-id','Registration dictionary id lookup')
+check(run_dictionary_pipeline('sent',{'id':'msg-fixture-id','state':'pending'},'sendState')['sendState']=='pending','Send dictionary state lookup')
+# Validate actual regex bytes, not only source spellings.
+patterns=[a['WFWorkflowActionParameters']['WFMatchTextPattern'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.text.match']
+check(origin_pattern.replace(r'\Z',r'\z') in patterns,'Emitted origin regex matches tested source')
+check(r'"format"\s*:\s*"ssclip-connection"' in patterns,'Credential marker has correct native regex escaping')
+check(not any(a['WFWorkflowActionIdentifier'] in ['is.workflow.actions.math','is.workflow.actions.base64encode'] for a in acts),'Server owns byte limit; no fragile native arithmetic')
+check(any(a['WFWorkflowActionIdentifier']=='is.workflow.actions.appendvariable' and a['WFWorkflowActionParameters'].get('WFVariableName')=='choices' for a in acts),'Device selection accumulates instead of overwriting list')
+for pattern in patterns:
+ check('\\\\' not in pattern,'No doubled regex escape')
+print(f'PASS: {checks} structural/privacy/generated-dictionary checks; {len(acts)} main actions, {len(helper["WFWorkflowActions"])} helper actions. iOS runtime and Apple signing NOT verified by these checks.')
 for path in ROOT.glob('*_unsigned.shortcut'):print(hashlib.sha256(path.read_bytes()).hexdigest(),path.name)

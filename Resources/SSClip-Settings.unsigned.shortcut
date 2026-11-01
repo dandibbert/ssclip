@@ -21,7 +21,7 @@
 				<key>CustomOutputName</key>
 				<string>Text</string>
 				<key>UUID</key>
-				<string>90c06c5f-23e7-57eb-a1e5-4a0e067a146a</string>
+				<string>92658020-6ec7-4c42-893c-98137e1aa608</string>
 				<key>WFTextActionText</key>
 				<string>SSCLIP_SETUP_V1</string>
 			</dict>
@@ -38,7 +38,7 @@
 						<key>OutputName</key>
 						<string>Text</string>
 						<key>OutputUUID</key>
-						<string>90c06c5f-23e7-57eb-a1e5-4a0e067a146a</string>
+						<string>92658020-6ec7-4c42-893c-98137e1aa608</string>
 						<key>Type</key>
 						<string>ActionOutput</string>
 					</dict>

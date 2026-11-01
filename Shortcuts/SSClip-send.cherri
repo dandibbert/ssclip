@@ -55,15 +55,19 @@ if @setupInput.text == "SSCLIP_SETUP_V1" {
 if @stateFile {
  if @needsConfig != 1 {
   @state = getDictionary(@stateFile)
-  @stateVersion = @state['version']
+  @stateVersion = getValue(@state, "version")
   if @stateVersion.number != 1 {
    alert("本机配置版本不兼容。请运行“SSClip设置”选择重新导入配置。", "未发送")
    stop()
   }
-  @server = getText(@state['server_url'])
-  @apiKey = getText(@state['api_key'])
-  @targetID = getText(@state['target_id'])
-  @targetName = getText(@state['target_name'])
+  @serverValue = getValue(@state, "server_url")
+  @server = getText(@serverValue)
+  @apiKeyValue = getValue(@state, "api_key")
+  @apiKey = getText(@apiKeyValue)
+  @targetIDValue = getValue(@state, "target_id")
+  @targetID = getText(@targetIDValue)
+  @targetNameValue = getValue(@state, "target_name")
+  @targetName = getText(@targetNameValue)
  }
 } else {
  @needsConfig = 1
@@ -74,32 +78,30 @@ if @needsConfig == 1 {
  confirm("请选择你在 SSClip 管理端导出的连接 JSON。首次配置只保存连接，不会发送当前剪贴板。配置会存到本人 iCloud Drive/Shortcuts/SSClip，请勿分享。", "连接 SSClip")
  @configFile = selectFile()
  @configText = getText(@configFile)
- @config64 = base64Encode(@configText)
- @config64Compact = replaceText('\s', "", @config64, true, true)
- @config64Length = count(@config64Compact, "Characters")
- @configPadding = 0
- if @config64Compact endsWith "=" { @configPadding = 1 }
- if @config64Compact endsWith "==" { @configPadding = 2 }
- @configLength = @config64Length / 4
- @configLength *= 3
- @configLength -= @configPadding
- if @configLength > 16384 {
-  alert("配置文件过大，请选择管理端导出的连接 JSON。", "未导入")
+ @config = getDictionary(@configText)
+ @formatValue = getValue(@config, "format")
+ @format = getText(@formatValue)
+ @version = getValue(@config, "version")
+ if !@format {
+  alert("配置缺少 format 字段。请选择管理端导出的连接 JSON，原配置未改变。", "未导入")
   stop()
  }
- @config = getDictionary(@configText)
- @format = getText(@config['format'])
- @version = @config['version']
  if @format.text != "ssclip-connection" {
-  alert("这不是 SSClip 连接配置。原配置未改变。", "未导入")
+  alert("配置的 format 标记不匹配。这不是 SSClip 连接配置，原配置未改变。", "未导入")
+  stop()
+ }
+ if !@version {
+  alert("配置缺少 version 字段。请选择管理端导出的连接 JSON，原配置未改变。", "未导入")
   stop()
  }
  if @version.number != 1 {
   alert("不支持此配置版本。原配置未改变。", "未导入")
   stop()
  }
- @server = getText(@config['server_url'])
- @apiKey = getText(@config['api_key'])
+ @serverValue = getValue(@config, "server_url")
+ @server = getText(@serverValue)
+ @apiKeyValue = getValue(@config, "api_key")
+ @apiKey = getText(@apiKeyValue)
 }
 // Only an explicitly confirmed HTTPS origin; never accept credentials, query, fragment or a path.
 @originMatch = matchText('\Ahttps://(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?::[1-9][0-9]{0,4})?/?\z', @server)
@@ -152,28 +154,32 @@ if @identityFile {
 if @nameParts { @phoneName = getFirstItem(@nameParts) }
 @registerRaw = jsonRequest("{@server}/api/service/register", "POST", {"id":"{@phoneID}", "name":"{@phoneName}", "platform":"ios"}, {"Authorization":"Bearer {@apiKey}"})
 @registered = getDictionary(@registerRaw)
-@registeredDeviceRaw = @registered['device']
+@registeredDeviceRaw = getValue(@registered, "device")
 if !@registeredDeviceRaw {
  alert("手机注册未成功。请确认 API 已开放、连接配置仍有效。未发送。", "连接失败")
  stop()
 }
 @registeredDevice = getDictionary(@registeredDeviceRaw)
-@registeredID = getText(@registeredDevice['id'])
+@registeredIDValue = getValue(@registeredDevice, "id")
+@registeredID = getText(@registeredIDValue)
 if @registeredID.text != @phoneID {
  alert("手机注册未成功。请确认 API 已开放、配置仍有效。未发送，也未修改原连接配置。", "连接失败")
  stop()
 }
 @devicesRaw = downloadURL("{@server}/api/service/devices", {"Authorization":"Bearer {@apiKey}"})
 @deviceResponse = getDictionary(@devicesRaw)
-@devices = @deviceResponse['devices']
+@devices = getValue(@deviceResponse, "devices")
 @choices = []
 @choiceMap = {}
 @targetFound = 0
 for device in @devices {
  @item = getDictionary(@device)
- @platform = getText(@item['platform'])
- @id = getText(@item['id'])
- @name = getText(@item['name'])
+ @platformValue = getValue(@item, "platform")
+ @platform = getText(@platformValue)
+ @idValue = getValue(@item, "id")
+ @id = getText(@idValue)
+ @nameValue = getValue(@item, "name")
+ @name = getText(@nameValue)
  if @platform.text == "macos" {
   if @id.text != @phoneID {
    @idMatch = matchText('\A[A-Za-z0-9_-]{8,96}\z', @id)
@@ -230,20 +236,7 @@ if @configMarker {
  alert("当前剪贴板疑似连接配置，已阻止发送。", "未发送")
  stop()
 }
-// Base64 encodes native text as UTF-8; strip wrapping and subtract padding for exact byte length.
-@encoded = base64Encode(@text)
-@compact64 = replaceText('\s', "", @encoded, true, true)
-@base64Length = count(@compact64, "Characters")
-@padding = 0
-if @compact64 endsWith "=" { @padding = 1 }
-if @compact64 endsWith "==" { @padding = 2 }
-@byteCount = @base64Length / 4
-@byteCount *= 3
-@byteCount -= @padding
-if @byteCount > 32768 {
- alert("纯文本超过 32 KiB，未发送。请缩短内容。", "未发送")
- stop()
-}
+// The server enforces the 32 KiB UTF-8 limit. No compiler-dependent arithmetic.
 @m1 = randomNumber(100000000,999999999)
 @m2 = randomNumber(100000000,999999999)
 @m3 = randomNumber(100000000,999999999)
@@ -251,8 +244,10 @@ if @byteCount > 32768 {
 @messageID = "msg-{@m1}-{@m2}-{@m3}-{@m4}"
 @sendRaw = jsonRequest("{@server}/api/service/send", "POST", {"id":"{@messageID}","source":"{@phoneID}","target":"{@targetID}","text":"{@text}","ttl_seconds":1200}, {"Authorization":"Bearer {@apiKey}"})
 @sent = getDictionary(@sendRaw)
-@returnedID = getText(@sent['id'])
-@sendState = getText(@sent['state'])
+@returnedIDValue = getValue(@sent, "id")
+@returnedID = getText(@returnedIDValue)
+@sendStateValue = getValue(@sent, "state")
+@sendState = getText(@sendStateValue)
 if @returnedID.text == @messageID {
  if @sendState.text == "pending" {
   alert("服务器已接收 → {@targetName}。20 分钟内有效；不代表 Mac 已复制。", "SSClip")
