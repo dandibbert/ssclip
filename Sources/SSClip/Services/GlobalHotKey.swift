@@ -26,7 +26,7 @@ final class GlobalHotKey {
                 guard status == noErr, let reference else { return nil }
                 return Registration(unregister: { _ = UnregisterEventHotKey(reference) })
             },
-            schedule: { action in DispatchQueue.main.async(execute: action) },
+            schedule: { action in DispatchQueue.main.async { action() } },
             installCarbonHandler: true
         )
     }
@@ -76,7 +76,7 @@ final class GlobalHotKey {
                         owner.handleEvent(signature: identifier.signature, id: identifier.id, kind: GetEventKind(event))
                     }
                 },
-                UInt32(buffer.count), buffer.baseAddress,
+                buffer.count, buffer.baseAddress,
                 Unmanaged.passUnretained(self).toOpaque(), &eventHandlerRef
             )
         }
