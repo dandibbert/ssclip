@@ -112,8 +112,14 @@ struct ClipboardStoreTests {
         pasteboard.clearContents()
         generation = 1
         monitor.checkForChange()
-        pasteboard.setString("delayed browser text", forType: .string)
-        try await Task.sleep(nanoseconds: 250_000_000)
+        #expect(pasteboard.setString("delayed browser text", forType: .string))
+        // The retry is asynchronous on MainActor. A fixed 250ms sleep is flaky
+        // when the complete suite is concurrently initializing AppKit objects.
+        let deadline = Date().addingTimeInterval(2)
+        while captures.isEmpty && Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        monitor.stop()
 
         #expect(captures.count == 1)
         #expect(captures.first?.kind == .text)
