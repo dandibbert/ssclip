@@ -11,8 +11,7 @@
 
 // Storage is intentionally the user's private iCloud Drive/Shortcuts area.
 action 'documentpicker.open' loadSSClipState() {
- "WFFileStorageService":"iCloud Drive", "WFShowFilePicker":false,
- "WFGetFilePath":"SSClip/connection-state.json", "WFFileErrorIfNotFound":false
+ "WFGetFilePath":"/SSClip/connection-state.json", "WFFileErrorIfNotFound":false
 }
 action 'documentpicker.save' saveSSClipState(variable content: 'WFInput') {
  "WFFileStorageService":"iCloud Drive", "WFAskWhereToSave":false,
@@ -25,6 +24,7 @@ action 'file.createfolder' makeSSClipFolder() {
 comment('SSClip：首次选择管理端连接 JSON；以后每次运行选择接收设备，再发送纯文本。设备列表中可更换连接配置。配置保存在本人 iCloud Drive/Shortcuts/SSClip，勿分享。服务器接收不等于接收设备已收到或复制。')
 @setupInput = ShortcutInput
 @stateFile = loadSSClipState()
+@stateCount = count(@stateFile, "Items")
 @needsConfig = 0
 @apiKey = ""
 @targetID = ""
@@ -32,9 +32,10 @@ comment('SSClip：首次选择管理端连接 JSON；以后每次运行选择接
 if @setupInput.text == "SSCLIP_REIMPORT_V2" {
  @needsConfig = 1
 }
-if @stateFile {
+if @stateCount.number > 0 {
  if @needsConfig != 1 {
-  @state = getDictionary(@stateFile)
+  @stateText = getText(@stateFile)
+  @state = getDictionary(@stateText)
   @stateVersion = getValue(@state, "version")
   if @stateVersion.number != 1 {
    @recoveryOptions = ["重新导入连接配置", "取消"]
@@ -158,11 +159,43 @@ if @registeredID.text != @senderID {
  stop()
 }
 if @needsConfig == 1 {
- @newState = {"version":1,"server_url":"{@server}","api_key":"{@apiKey}"}
+ @newState = {"format":"ssclip-connection","version":1,"server_url":"{@server}","api_key":"{@apiKey}"}
  @newStateText = getText(@newState)
  makeSSClipFolder()
  saveSSClipState(@newStateText)
- alert("连接配置已保存。本次未发送剪贴板；下次运行请选择接收设备。", "SSClip 已连接")
+ // Must verify using the cold-start loader, never only the Save File output.
+ @verifiedFile = loadSSClipState()
+ @verifiedCount = count(@verifiedFile, "Items")
+ if @verifiedCount.number < 1 {
+  alert("保存后无法从固定路径重新读到配置，不能确认已保存。本次未发送。请只反馈文件位置和文件名，不要分享内容。", "保存校验失败")
+  stop()
+ }
+ @verifiedText = getText(@verifiedFile)
+ @verifiedState = getDictionary(@verifiedText)
+ @verifiedFormatValue = getValue(@verifiedState, "format")
+ @verifiedFormat = getText(@verifiedFormatValue)
+ @verifiedVersion = getValue(@verifiedState, "version")
+ @verifiedServerValue = getValue(@verifiedState, "server_url")
+ @verifiedServer = getText(@verifiedServerValue)
+ @verifiedKeyValue = getValue(@verifiedState, "api_key")
+ @verifiedKey = getText(@verifiedKeyValue)
+ if @verifiedFormat.text != "ssclip-connection" {
+  alert("读回的配置格式不匹配，不能确认已保存。本次未发送，不要分享配置内容。", "保存校验失败")
+  stop()
+ }
+ if @verifiedVersion.number != 1 {
+  alert("读回的配置版本不匹配，不能确认已保存。本次未发送，不要分享配置内容。", "保存校验失败")
+  stop()
+ }
+ if @verifiedServer.text != @server {
+  alert("读回的服务地址与本次设置不匹配，不能确认已保存。本次未发送，不要分享配置内容。", "保存校验失败")
+  stop()
+ }
+ if @verifiedKey.text != @apiKey {
+  alert("读回的凭据与本次设置不匹配，不能确认已保存。本次未发送，不要分享配置内容。", "保存校验失败")
+  stop()
+ }
+ alert("连接配置已保存并读回校验。本次未发送剪贴板；下次运行请选择接收设备。", "SSClip 已连接")
  stop()
 }
 @devicesRaw = downloadURL("{@server}/api/service/devices", {"Authorization":"Bearer {@apiKey}"})
@@ -230,8 +263,8 @@ if !@text {
  alert("剪贴板中没有纯文本。", "未发送")
  stop()
 }
-if @text == @apiKey {
- alert("当前剪贴板是 API Key，已阻止发送。", "未发送")
+if @text contains @apiKey {
+ alert("当前剪贴板包含 API Key，已阻止发送。", "未发送")
  stop()
 }
 @configMarker = matchText('"format"\s*:\s*"ssclip-connection"', @text)

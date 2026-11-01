@@ -25,6 +25,7 @@ final class RelayController: ObservableObject {
     private let journalURL: URL
     private let pasteboard: NSPasteboard
     private let session: URLSession
+    private let sendSession: URLSession
     private let credentialReader: (String) -> String?
     private let credentialWriter: (String, String) -> Bool
     private let sleepNanoseconds: UInt64
@@ -62,12 +63,8 @@ final class RelayController: ObservableObject {
         targetID = defaults.string(forKey: "relay.v2.target") ?? ""
         let root = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("SSClip")
         journalURL = root.appendingPathComponent("relay-inbox.json")
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 12
-        configuration.timeoutIntervalForResource = 15
-        configuration.httpCookieStorage = nil
-        configuration.urlCache = nil
-        self.session = session ?? URLSession(configuration: configuration, delegate: RelayNoRedirect(), delegateQueue: nil)
+        self.session = session ?? URLSession(configuration: Self.networkConfiguration(forSending: false), delegate: RelayNoRedirect(), delegateQueue: nil)
+        self.sendSession = session ?? URLSession(configuration: Self.networkConfiguration(forSending: true), delegate: RelayNoRedirect(), delegateQueue: nil)
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: journalURL.path) {
@@ -207,12 +204,23 @@ final class RelayController: ObservableObject {
         connect(startReceiving: true)
     }
 
+    static func networkConfiguration(forSending: Bool) -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        // Bark may spend up to 8s checking DNS and 8s on push delivery.
+        configuration.timeoutIntervalForRequest = forSending ? 30 : 12
+        configuration.timeoutIntervalForResource = forSending ? 35 : 15
+        configuration.httpCookieStorage = nil
+        configuration.urlCache = nil
+        return configuration
+    }
+
     private enum Failure: Error { case http(Int), service(String), invalid, storage }
     private func request(_ endpoint: String, body: [String: Any]? = nil) async throws -> Data {
         guard let base = RelayPolicy.baseURL(serviceURL), let credential = credentialReader(serviceURL) else { throw Failure.invalid }
         var components = URLComponents(url: base.appendingPathComponent("api/service/" + endpoint), resolvingAgainstBaseURL: false)!
         if body == nil && (endpoint == "poll" || endpoint == "status") { components.queryItems = [URLQueryItem(name: "target", value: deviceID)] }
         var req = URLRequest(url: components.url!)
+        req.timeoutInterval = endpoint == "send" ? 30 : 12
         req.setValue("Bearer " + credential, forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body {
@@ -220,7 +228,8 @@ final class RelayController: ObservableObject {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.httpBody = try JSONSerialization.data(withJSONObject: body)
         }
-        let (data, response) = try await session.data(for: req)
+        let transport = endpoint == "send" ? sendSession : session
+        let (data, response) = try await transport.data(for: req)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw Failure.invalid }
         guard (200...299).contains(http.statusCode) else {

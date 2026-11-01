@@ -18,8 +18,17 @@
 
 ## 构建与验证事实
 - 使用官方 Cherri v2.3.0 二进制，`--skip-sign`，禁用 `--derive-uuids`。所有字典键用显式原生 getvalueforkey，不用属性语法。`normalize_shortcuts.py` 清理错误命名变量输出元数据。
-- 当前只有一个模板：457 个原生 actions，2707 项结构/隐私/实际字典 fixture/旧状态兼容/控制流检查通过。`build_unsigned.py` 只生成发送模板，不生成设置 helper。
+- 当前只有一个模板：513 个原生 actions，3014 项结构/隐私/实际字典 fixture/旧状态兼容/控制流检查通过。`build_unsigned.py` 只生成发送模板，不生成设置 helper。
 - 用户已在 iPhone 安装旧版并验证修复后的配置成功；尚不能据此声称发送成功。此轮“每次选择设备”新模板仍需重新签名、安装并实机验证。静态测试不是 iOS 模拟器。
 - 签名输入和输出均使用名称 `SSClip发送.shortcut`；资源 `SSClip-Send.unsigned.shortcut` 本身未签名。不要把 unsigned 文件当作现成可安装文件。
 
 接收列表只列 macos 或 platform=ios 且 transport=bark；普通旧 iOS relay 注册记录不作为收件端。显式 can_receive:false 接收端也排除：原生字典转 JSON 后匹配 JSON 布尔 false，不依赖本地化“是/否”文本；字段缺失兼容旧服务，字符串 "false" 不当作布尔。共享发送源另按固定 ID 排除。Bark 返回 pending/submitted 时仍只显示服务端接受，不代表手机已收到。
+
+## 重复要求配置的修订
+用户已确认现有 `iCloud Drive/Shortcuts/SSClip/connection-state.json` 存在，而且先显示“连接 SSClip”确认再出现配置选择器。因此问题在加载/存在判断链路；不能把扩展名推测当成已证实原因。
+
+本候选保留原 `.json` 文件和保存位置，不重命名、不迁移、不删除。加载使用真实 Apple Frames 导出中观察到的现代形态：`WFGetFilePath=/SSClip/connection-state.json`、`WFFileErrorIfNotFound=false`，不再放旧 provider/picker 参数；通过 Count Items 判断存在，再明确 File→Text→Dictionary。
+
+新保存加入 format 标记；只有从同一冷启动 loader 再次读出，并确认 format、version、server_url、api_key 四项一致，才显示“已保存并读回校验”。失败不会回显值或伪报保存成功。API Key 出现在剪贴板任意位置也会阻止发送，覆盖旧无 format 状态全文。
+
+`test_persistence_actions.py` 直接解释生成的原生动作子集：三次全新变量环境只共享虚拟文件映射，第一次导入，第二/三次到目标选择；旧状态兼容；保存错路径/provider及四项读回不匹配都不得成功。5 个测试组通过。文件提供器模型按观察到的现代 Shortcuts-root 语义声明，不模拟 iCloud/权限/迁移，不能代替本次 iPhone 实测。

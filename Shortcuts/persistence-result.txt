@@ -1,0 +1,10 @@
+test_all_readback_fields_checked (__main__.PersistenceTests.test_all_readback_fields_checked) ... ok
+test_existing_legacy_state_without_format_needs_no_import (__main__.PersistenceTests.test_existing_legacy_state_without_format_needs_no_import) ... ok
+test_only_generated_actions_and_no_secret_feedback (__main__.PersistenceTests.test_only_generated_actions_and_no_secret_feedback) ... ok
+test_three_cold_runs_share_files_only (__main__.PersistenceTests.test_three_cold_runs_share_files_only) ... ok
+test_wrong_path_or_provider_never_claims_success (__main__.PersistenceTests.test_wrong_path_or_provider_never_claims_success) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.003s
+
+OK

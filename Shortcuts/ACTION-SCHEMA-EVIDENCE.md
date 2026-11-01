@@ -49,3 +49,7 @@
 最终接收目标扩展为 Mac 与已启用 Bark 的iOS。显式getvalueforkey读取transport，macos或(ios且bark)才进入列表，并按保留ID排除共享source。根据本站契约唯一can_receive=false正是此保留source，不使用脆弱布尔文本比较。Bark send仍state=pending，故成功仅说明服务端接受。最终447actions，2619检查。
 
 最终补充显式can_receive:false过滤：原生getText(item dictionary)得到JSON，matchText匹配仅JSON布尔false。生成regex对true/false/缺失/字符串false/设备名含伪字段向量验证；生成eligibility块解释器也覆盖disabled Mac/Bark。最终457actions、2707检查。该新gate需iPhone实机验证，不能用合成JSON检查替代原生运行。
+
+## 反复导入修订的真实导出依据
+来源：https://gist.github.com/extratone/f0debc4ccc32ee1349be4e8632c2367b （Apple Frames 4 原生导出分析）。动作136及JSON4314–4318为documentpicker.open，仅WFGetFilePath=/Frames/NewFrames.json、WFFileErrorIfNotFound=false、UUID；紧随动作137设变量、138 Count Items、139条件。此模式支持本候选的modern loader + Count Items设计，但不证明用户设备已修复。用户已证实.json存在，故保留文件，不采用扩展名迁移推测。
+新候选513actions、3014结构检查，并新增实际生成动作的三冷启/保存读回小解释器5测试组。新格式/版本/地址/key四项读回检查且无值反馈。

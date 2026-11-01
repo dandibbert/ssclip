@@ -57,3 +57,11 @@ CI 对精确提交在 macOS Apple Silicon 运行完整 Swift 测试、release �
 ```
 
 建议使用应用按钮或备用脚本，它们会以正确中文文件名暂存输入来保持导入名；直接命令后仍需确认 iPhone 上的主名称为“SSClip发送”。`Resources/*.unsigned.shortcut` 是未签名模板，不能直接当作安装文件打开。
+
+### 自动读取连接配置修正
+
+用户反馈缓存文件存在但每次仍进入导入。当前修订改用实际原生导出示例中的 Shortcuts 根相对 Get File 参数，并以 Count Items 判存在，显式转换 File→Text→Dictionary；保留原 `connection-state.json`，不删除或迁移已存配置。新保存必须通过同一读取动作重新取回，并在内部核对 format/version/server_url/api_key 后才报告成功。错误只显示类别，不显示配置值。已有无 format 的旧缓存仍可读取。
+
+CI 新增直接解释生成 plist 的三次冷启动模型及保存路径/字段故障检查：第一次配置，第二、第三次复用文件进入设备选择。它不是 iPhone 或 iCloud File Provider 实测，不能作为平台问题已解决的证据；用户需确认新版连续运行不再要求导入。
+
+Bark 发送采用单独的 30 秒 request / 35 秒 resource 总预算，覆盖后台 DNS 与推送检查；普通请求保持 12 / 15 秒。超时仍不自动重发，结果不明应先检查目标设备。

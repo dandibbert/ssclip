@@ -20,6 +20,7 @@ jobs:
         run: |
           plutil -lint Resources/SSClip-Send.unsigned.shortcut
           python3 Shortcuts/validate_shortcuts.py
+          python3 Shortcuts/test_persistence_actions.py
           python3 - <<'PY'
           import pathlib, plistlib, hashlib
           summaries = [

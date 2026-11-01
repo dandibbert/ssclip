@@ -30,6 +30,7 @@ jobs:
       - name: Verify bundled shortcut semantics and native regex
         run: |
           python3 Shortcuts/validate_shortcuts.py
+          python3 Shortcuts/test_persistence_actions.py
           swift scripts/test-shortcut-regex.swift
 
       - name: Run tests

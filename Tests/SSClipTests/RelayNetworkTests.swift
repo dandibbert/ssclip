@@ -230,6 +230,8 @@ struct RelayNetworkTests {
         context.controller.sendCurrentClipboard(to: target)
         try await eventually { context.scenario.count("send") == 1 && !context.controller.isSending }
         #expect(context.scenario.sentTargets == [target])
+        #expect(context.scenario.recordedRequests.filter { $0.url?.lastPathComponent == "send" }.allSatisfy { $0.timeoutInterval == 30 })
+        #expect(context.scenario.recordedRequests.filter { $0.url?.lastPathComponent != "send" }.allSatisfy { $0.timeoutInterval == 12 })
         #expect(context.controller.targetID == testPeerID)
         #expect(context.defaults.string(forKey: "relay.v2.target") == testPeerID)
         #expect(!context.controller.enabled)
@@ -268,6 +270,17 @@ struct RelayNetworkTests {
         #expect(context.controller.status.contains("原默认设备已不可用"))
         #expect(context.controller.devices.filter(\.canReceive).contains { $0.id == "ssclip-bark-phone-1" })
         #expect(!context.controller.devices.filter(\.canReceive).contains { $0.id == "old-ios-queue-sender" || $0.id == "ios-shortcut-sender" })
+    }
+
+    @Test func sendBudgetCoversBarkWithoutExtendingPollingResourceDeadline() {
+        let send = RelayController.networkConfiguration(forSending: true)
+        let normal = RelayController.networkConfiguration(forSending: false)
+        #expect(send.timeoutIntervalForRequest == 30)
+        #expect(send.timeoutIntervalForResource == 35)
+        #expect(normal.timeoutIntervalForRequest == 12)
+        #expect(normal.timeoutIntervalForResource == 15)
+        #expect(send.httpCookieStorage == nil && send.urlCache == nil)
+        #expect(normal.httpCookieStorage == nil && normal.urlCache == nil)
     }
 
     @Test func receiveCapabilityDecodingKeepsLegacyMacButRejectsSendOnlyAndNonBarkIOS() throws {

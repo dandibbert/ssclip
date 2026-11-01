@@ -17,8 +17,8 @@ def walk(x):
   for v in x:yield from walk(v)
 
 def resource():
- for path in [ROOT/'SSClip发送_unsigned.shortcut', ROOT/'SSClip-Send.unsigned.shortcut', ROOT.parent/'Resources'/'SSClip-Send.unsigned.shortcut']:
-  if path.exists(): return path
+ for path in [ROOT/'SSClip发送_unsigned.shortcut',ROOT/'SSClip-Send.unsigned.shortcut',ROOT.parent/'Resources'/'SSClip-Send.unsigned.shortcut']:
+  if path.exists():return path
  raise FileNotFoundError('SSClip-Send.unsigned.shortcut')
 main=plistlib.loads(resource().read_bytes())
 for name,p in [('main',main)]:
@@ -56,9 +56,9 @@ check(set(fields)=={'id','source','target','text','ttl_seconds'},'Complete proto
 text=fields['text']['Value']
 check(text['string']=='\ufffc' and next(iter(text['attachmentsByRange'].values()))['VariableName']=='text','Text JSON value uses native magic variable')
 reads=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.documentpicker.open']
-check(len(reads)==1,'Shared connection state only; no physical phone identity')
+check(len(reads)==2,'Cold start and readback use same shared connection state')
 for q in reads:
- check(q['WFFileStorageService']=='iCloud Drive' and q['WFShowFilePicker'] is False and q['WFFileErrorIfNotFound'] is False,'Private persistent file lookup is noninteractive and missing-safe')
+ check(q['WFGetFilePath']=='/SSClip/connection-state.json' and q['WFFileErrorIfNotFound'] is False and 'WFFileStorageService' not in q and 'WFShowFilePicker' not in q,'Modern observed file loader, same canonical path')
 writes=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.documentpicker.save']
 check({q['WFFileDestinationPath'] for q in writes}=={'SSClip/connection-state.json'},'No clipboard body persistence')
 for q in writes:check(q['WFAskWhereToSave'] is False and q['WFFileStorageService']=='iCloud Drive','No public config sharing')
@@ -66,7 +66,7 @@ alerts=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIden
 for q in alerts:
  for node in walk(q):
   if isinstance(node,dict) and node.get('Type')=='Variable':
-   check(node['VariableName'] not in ['apiKey','text','clipboard','configText','state','newStateText'],'No secret or clipboard in alerts')
+   check(node['VariableName'] not in ['apiKey','text','clipboard','configText','state','newStateText','verifiedKey','verifiedText','verifiedState'],'No secret or clipboard in alerts')
 check(sum(a['WFWorkflowActionIdentifier']=='is.workflow.actions.getclipboard' for a in acts)==1,'Read clipboard once, only send path')
 check(any(a['WFWorkflowActionIdentifier']=='is.workflow.actions.getitemtype' for a in acts),'Explicit type gate before text conversion')
 source=(ROOT/'SSClip-send.cherri').read_text()
@@ -283,5 +283,15 @@ for row,expected in receiver_fixtures:
 cap_pattern=next(a['WFWorkflowActionParameters']['WFMatchTextPattern'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.text.match' and 'can_receive' in a['WFWorkflowActionParameters']['WFMatchTextPattern'])
 for row,expected in [({'can_receive':False},True),({'can_receive':True},False),({},False),({'can_receive':'false'},False),({'name':'"can_receive":false'},False)]:
  check(bool(re.search(cap_pattern,json.dumps(row,ensure_ascii=False)))==expected,'Actual capability regex detects only JSON Boolean false')
+# Credential substring guard includes unmarked legacy state, not only a bare key.
+secret_guard=next(a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.conditional' and a.get('WFWorkflowActionParameters',{}).get('WFCondition')==99)
+check(list(secret_guard['WFConditionalActionString']['Value']['attachmentsByRange'].values())==[{'Type':'Variable','VariableName':'apiKey'}],'Native contains uses runtime key, not a literal credential')
+check('@verifiedFile = loadSSClipState()' in source and '@stateFile = loadSSClipState()' in source,'Readback calls identical cold-start loader')
+initial_count_index=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.count' and a['WFWorkflowActionParameters']['Input']['Value'].get('VariableName')=='stateFile')
+count_gate_index=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.conditional' and a.get('WFWorkflowActionParameters',{}).get('WFInput',{}).get('Variable',{}).get('Value',{}).get('VariableName')=='stateCount')
+file_text_index=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.detect.text' and a['WFWorkflowActionParameters']['WFInput']['Value'].get('VariableName')=='stateFile')
+parse_index=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.detect.dictionary' and a['WFWorkflowActionParameters']['WFInput']['Value'].get('VariableName')=='stateText')
+check(initial_count_index<count_gate_index<file_text_index<parse_index,'Actual Count Items gate precedes explicit file-text-dictionary decode')
+check(acts[count_gate_index]['WFWorkflowActionParameters']['WFCondition']==2 and acts[count_gate_index]['WFWorkflowActionParameters']['WFNumberValue']==0,'Actual file presence is count > 0')
 print(f'PASS: {checks} structural/privacy/generated-dictionary checks; {len(acts)} main actions. iOS runtime and Apple signing NOT verified by these checks.')
 for path in [resource()]:print(hashlib.sha256(path.read_bytes()).hexdigest(),path.name)
