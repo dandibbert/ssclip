@@ -119,9 +119,10 @@ private struct MenuBarContent: View {
 
 private struct RelayMenuContent: View {
     @ObservedObject var relay: RelayController
+    @EnvironmentObject private var settings: AppSettings
 
     var body: some View {
-        Button("发送当前纯文本 → \(destinationName)") {
+        Button("发送当前纯文本 → \(destinationName)  \(shortcutLabel)") {
             relay.sendCurrentClipboard()
         }
         .disabled(!relay.isConfigured || relay.isSending || relay.isRegistering || !relay.devices.contains(where: { $0.id == relay.targetID && $0.id != relay.deviceID }))
@@ -129,7 +130,13 @@ private struct RelayMenuContent: View {
             .font(.caption)
     }
 
+    private var shortcutLabel: String {
+        settings.sendHotKeyEnabled ? "（\(settings.sendHotKey.displayName)）" : "（快捷键未开启）"
+    }
+
     private var destinationName: String {
-        relay.devices.first(where: { $0.id == relay.targetID })?.name ?? "选择目标设备"
+        guard let target = relay.devices.first(where: { $0.id == relay.targetID }) else { return "未选择默认目标" }
+        let duplicates = relay.devices.filter { $0.name == target.name }.count > 1
+        return duplicates ? "\(target.name) · \(target.id.prefix(6))" : target.name
     }
 }

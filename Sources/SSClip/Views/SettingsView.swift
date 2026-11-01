@@ -231,7 +231,10 @@ struct SettingsView: View {
                         recorder(
                             for: $settings.hotKey,
                             validate: { candidate in
-                                settings.panelShortcuts.conflicts(with: candidate)
+                                if settings.sendHotKeyEnabled && candidate.sameCombo(as: settings.sendHotKey) {
+                                    return "与全局发送快捷键冲突"
+                                }
+                                return settings.panelShortcuts.conflicts(with: candidate)
                                     ? "与面板内快捷键冲突" : nil
                             }
                         )
@@ -258,6 +261,49 @@ struct SettingsView: View {
                             .font(.system(size: 10.5))
                             .foregroundStyle(Theme.danger)
                             .accessibilityLabel("快捷键错误：\(message)")
+                    }
+                }
+            }
+
+            SettingsSection(title: "发送当前剪贴板（全局）") {
+                SettingsRow {
+                    Toggle("启用全局发送快捷键", isOn: $settings.sendHotKeyEnabled)
+                        .toggleStyle(.switch)
+                        .tint(Theme.controlFill)
+                }
+                CardDivider()
+                SettingsRow(verticalPadding: 9) {
+                    HStack {
+                        Text("发送到默认目标")
+                        Spacer()
+                        recorder(for: $settings.sendHotKey, validate: { settings.sendHotKeyConflict($0) })
+                    }
+                }
+                CardDivider()
+                SettingsRow(verticalPadding: 9) {
+                    VStack(alignment: .leading, spacing: 9) {
+                        Text("在“跨设备同步”中选择默认发送目标。无需打开窗口，也无需开启自动接收。默认关闭以避免占用其他应用快捷键；不需要新增系统权限。")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            Button("恢复预设并关闭") {
+                                settings.sendHotKeyEnabled = false
+                                settings.sendHotKey = .defaultSend
+                            }
+                            .buttonStyle(SoftButtonStyle())
+                            Spacer()
+                            Text("预设 ⌃⌥⌘S")
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if let message = settings.sendHotKeyValidationMessage {
+                    CardDivider()
+                    SettingsRow {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Theme.danger)
                     }
                 }
             }
@@ -334,6 +380,9 @@ struct SettingsView: View {
                     validate: { candidate in
                         if candidate.sameCombo(as: settings.hotKey) {
                             return "与呼出面板快捷键冲突"
+                        }
+                        if settings.sendHotKeyEnabled && candidate.sameCombo(as: settings.sendHotKey) {
+                            return "与全局发送快捷键冲突"
                         }
                         var proposed = settings.panelShortcuts
                         proposed[keyPath: keyPath] = candidate

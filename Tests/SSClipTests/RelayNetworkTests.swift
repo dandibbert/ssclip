@@ -49,8 +49,10 @@ private final class RelayHTTPScenario: @unchecked Sendable {
         if path == "devices" {
             let device: [String: Any] = ["id": testDeviceID, "name": "Test Mac", "platform": "macos", "last_seen_at": 1]
             let peer: [String: Any] = ["id": testPeerID, "name": "Other device", "platform": "ios", "last_seen_at": 1]
-            return (200, try! JSONSerialization.data(withJSONObject: ["devices": [device, peer], "server_time": 1]))
+            let replacement: [String: Any] = ["id": "33333333-3333-4333-8333-333333333333", "name": "Different device", "platform": "ios", "last_seen_at": 1]
+            return (200, try! JSONSerialization.data(withJSONObject: ["devices": [device, mode == "peerGone" ? replacement : peer], "server_time": 1]))
         }
+        if path == "send", mode == "holdSend" { return nil }
         if path == "send" { return (200, Data("{\"state\":\"pending\"}".utf8)) }
         if request.url?.host == "new-relay.example.test", path == "poll" {
             return (200, Data("{\"messages\":[],\"server_time\":1}".utf8))
@@ -200,6 +202,8 @@ struct RelayNetworkTests {
         try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
         #expect(context.controller.isConfigured)
         #expect(!context.controller.enabled)
+        #expect(context.controller.targetID.isEmpty)
+        context.controller.selectTarget(testPeerID)
         #expect(context.controller.targetID == testPeerID)
         #expect(context.scenario.count("register") == 1)
         #expect(context.scenario.count("devices") == 1)
@@ -329,6 +333,92 @@ struct RelayNetworkTests {
         #expect(!disk.contains(testAPIKey))
         #expect(!disk.contains("ssclip-connection"))
         #expect(context.scenario.count("ack") >= 1)
+    }
+
+    @Test func missingDefaultTargetNeverFallsBackToAnotherDiscoveredDevice() async throws {
+        let context = try makeContext(mode: "peerGone")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        #expect(context.controller.targetID.isEmpty)
+        #expect(context.defaults.string(forKey: "relay.v2.target") == "")
+        var feedback = ""
+        context.controller.onSendFeedback = { feedback = $0 }
+        context.pasteboard.clearContents(); context.pasteboard.setString("do not misroute", forType: .string)
+        context.controller.sendCurrentClipboard()
+        #expect(context.scenario.count("send") == 0)
+        #expect(feedback.contains("默认发送目标"))
+    }
+
+    @Test func unconfiguredSendReportsReasonAndMakesNoRequest() throws {
+        let context = try makeContext(mode: "retry", configured: false)
+        defer { context.cleanUp() }
+        var feedback = ""
+        context.controller.onSendFeedback = { feedback = $0 }
+        context.controller.sendCurrentClipboard()
+        #expect(feedback.contains("导入连接配置"))
+        #expect(context.scenario.recordedRequests.isEmpty)
+    }
+
+    @Test func emptyClipboardReportsReasonWithoutSending() async throws {
+        let context = try makeContext(mode: "retry")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        context.pasteboard.clearContents()
+        var feedback = ""
+        context.controller.onSendFeedback = { feedback = $0 }
+        context.controller.sendCurrentClipboard()
+        #expect(feedback.contains("没有纯文本"))
+        #expect(context.scenario.count("send") == 0)
+    }
+
+    @Test func sendingKnownKeyOrConfigurationIsBlockedWithoutLeakingItInFeedback() async throws {
+        let context = try makeContext(mode: "retry")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        var feedback: [String] = []
+        context.controller.onSendFeedback = { feedback.append($0) }
+        for text in [testAPIKey, String(data: configurationData(), encoding: .utf8)!] {
+            context.pasteboard.clearContents(); context.pasteboard.setString(text, forType: .string)
+            context.controller.sendCurrentClipboard()
+            #expect(context.controller.status.contains("已阻止"))
+        }
+        #expect(context.scenario.count("send") == 0)
+        #expect(feedback.allSatisfy { !$0.contains(testAPIKey) && !$0.contains("ssclip-connection") })
+    }
+
+    @Test func rapidRepeatedSendAfterCompletionUploadsOnlyOnce() async throws {
+        let context = try makeContext(mode: "retry")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        context.pasteboard.clearContents(); context.pasteboard.setString("one intentional upload", forType: .string)
+        var feedback: [String] = []
+        context.controller.onSendFeedback = { feedback.append($0) }
+        context.controller.sendCurrentClipboard()
+        try await eventually { context.scenario.count("send") == 1 && !context.controller.isSending }
+        #expect(feedback.contains { $0.contains("服务器已接收") && $0.contains("Other device") && $0.contains("不代表") })
+        context.controller.sendCurrentClipboard()
+        #expect(context.controller.status.contains("重复发送"))
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(context.scenario.count("send") == 1)
+        #expect(!context.controller.enabled)
+    }
+
+    @Test func repeatedSendWhileRequestInFlightUploadsOnlyOnce() async throws {
+        let context = try makeContext(mode: "holdSend")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        context.pasteboard.clearContents(); context.pasteboard.setString("one in flight", forType: .string)
+        context.controller.sendCurrentClipboard()
+        try await eventually { context.scenario.count("send") == 1 }
+        context.controller.sendCurrentClipboard()
+        #expect(context.controller.status.contains("上一条"))
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(context.scenario.count("send") == 1)
     }
 
     private func configurationData(url: String = "https://relay.example.test") -> Data {

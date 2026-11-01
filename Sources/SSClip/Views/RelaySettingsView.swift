@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// Connection files are read directly; API keys never pass through the pasteboard.
 struct RelaySettingsView: View {
     @EnvironmentObject private var relay: RelayController
+    @EnvironmentObject private var settings: AppSettings
     @State private var deviceName = ""
     @State private var serviceURL = ""
     @State private var apiKey = ""
@@ -94,7 +95,7 @@ struct RelaySettingsView: View {
                 }
             }
             HStack {
-                Picker("发送到", selection: Binding(
+                Picker("默认发送目标", selection: Binding(
                     get: { relay.targetID },
                     set: { relay.selectTarget($0) }
                 )) {
@@ -120,6 +121,26 @@ struct RelaySettingsView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(!hasTarget || relay.isSending || relay.isRegistering)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Toggle("全局快捷键发送", isOn: $settings.sendHotKeyEnabled)
+                    .toggleStyle(.switch)
+                HStack {
+                    Text("发送到上方默认目标")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    HotKeyRecorderView(configuration: $settings.sendHotKey, validate: { settings.sendHotKeyConflict($0) })
+                        .frame(width: 130, height: 26)
+                        .background(Theme.raisedSurface, in: RoundedRectangle(cornerRadius: 6))
+                }
+                if let message = settings.sendHotKeyValidationMessage {
+                    Text(message).font(.caption).foregroundStyle(.red)
+                }
+                Text("预设 ⌃⌥⌘S，默认关闭。开启后无需打开窗口；按住不会连发。可点击键位重设，或关闭开关禁用。")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             Toggle("自动接收", isOn: Binding(
                 get: { relay.enabled },

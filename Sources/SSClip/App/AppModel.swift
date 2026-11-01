@@ -24,6 +24,11 @@ final class AppModel: ObservableObject {
     var panelProvider: (() -> ClipboardPanelController?)?
     var settingsPresenter: (() -> Void)?
     private let hotKey = GlobalHotKey()
+    private let sendHotKey = GlobalHotKey()
+    private lazy var sendShortcutBinding = SendShortcutBinding(settings: settings,
+        register: { [weak self] in self?.sendHotKey.register($0) ?? false },
+        unregister: { [weak self] in self?.sendHotKey.unregister() })
+    private lazy var relayFeedback = RelayFeedbackController()
     private let pasteService: PasteService
     private let pasteKeyObserver = PasteKeyObserver()
     private var previewController: PreviewController?
@@ -33,7 +38,16 @@ final class AppModel: ObservableObject {
     private var cancellables: Set<AnyCancellable> = []
     private var acceptedHotKey: HotKeyConfiguration
 
-    lazy var relay = RelayController(model: self)
+    lazy var relay: RelayController = {
+        let controller = RelayController(model: self)
+        controller.onSendFeedback = { [weak self] message in self?.relayFeedback.show(message) }
+        return controller
+    }()
+
+    static var isRecordingShortcut: Bool {
+        guard let app = NSApp else { return false }
+        return app.windows.contains { ($0.firstResponder as? HotKeyRecorderButton)?.isRecording == true }
+    }
 
     @discardableResult
     func removeRelayCredentialsFromHistory() -> Bool {
@@ -79,11 +93,31 @@ final class AppModel: ObservableObject {
         pasteKeyObserver.onPaste = { [weak self] in self?.advanceQueue() }
         hotKey.onPressed = { [weak self] in self?.togglePanel() }
         hotKey.register(settings.hotKey)
+        sendHotKey.shouldTrigger = { [weak self] in
+            guard let self else { return false }
+            return self.settings.sendHotKeyEnabled && self.settings.sendHotKeyConflict(self.settings.sendHotKey) == nil && !Self.isRecordingShortcut
+        }
+        sendHotKey.onPressed = { [weak self] in
+            guard let self, self.settings.sendHotKeyEnabled, !Self.isRecordingShortcut else { return }
+            self.relay.sendCurrentClipboard()
+        }
+        Publishers.CombineLatest3(settings.$sendHotKey, settings.$sendHotKeyEnabled, settings.$panelShortcuts)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _, _, _ in self?.sendShortcutBinding.refresh() }
+            .store(in: &cancellables)
 
         settings.$hotKey
             .dropFirst()
             .sink { [weak self] configuration in
                 guard let self else { return }
+                if self.settings.sendHotKeyEnabled && configuration.sameCombo(as: self.settings.sendHotKey) {
+                    self.settings.hotKeyValidationMessage = "与已启用的发送快捷键冲突；已保留原呼出快捷键"
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.settings.hotKey == configuration else { return }
+                        self.settings.hotKey = self.acceptedHotKey
+                    }
+                    return
+                }
                 if self.hotKey.register(configuration) {
                     if configuration != self.acceptedHotKey {
                         self.acceptedHotKey = configuration
@@ -92,7 +126,10 @@ final class AppModel: ObservableObject {
                 } else {
                     self.settings.hotKeyValidationMessage = "快捷键已被其他应用占用，已恢复上一组快捷键。"
                     if configuration != self.acceptedHotKey {
-                        self.settings.hotKey = self.acceptedHotKey
+                        DispatchQueue.main.async { [weak self] in
+                            guard let self, self.settings.hotKey == configuration else { return }
+                            self.settings.hotKey = self.acceptedHotKey
+                        }
                     }
                     self.showMessage("快捷键已被其他应用占用")
                 }
@@ -203,6 +240,7 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
+        sendShortcutBinding.refresh()
         _ = relay
         store.applyRetention(cutoff: settings.retentionCutoff, maximumItems: settings.itemLimit)
         monitor.start()

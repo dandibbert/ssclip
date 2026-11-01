@@ -4,6 +4,8 @@ import Foundation
 
 @MainActor
 final class RelayController: ObservableObject {
+    var onSendFeedback: ((String) -> Void)?
+    private var lastSendStarted = Date.distantPast
     @Published private(set) var devices: [RelayDevice] = []
     @Published private(set) var deviceName: String
     @Published private(set) var isConfigured = false
@@ -155,10 +157,10 @@ final class RelayController: ObservableObject {
                 self.registrationFailures = 0
                 self.devices = list.devices.sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
                 if !self.devices.contains(where: { $0.id == self.targetID && $0.id != self.deviceID }) {
-                    self.targetID = self.devices.first(where: { $0.id != self.deviceID })?.id ?? ""
+                    self.targetID = ""
                     self.defaults.set(self.targetID, forKey: "relay.v2.target")
                 }
-                self.status = self.targetID.isEmpty ? "本机已连接；请在另一台设备导入同一配置，然后刷新设备" : (self.enabled ? "已连接，等待新消息" : "已连接，可手动发送；自动接收未开启")
+                self.status = self.targetID.isEmpty ? "本机已连接；请选择默认发送目标（不会自动改选其他设备）" : (self.enabled ? "已连接，等待新消息" : "已连接，可手动发送；自动接收未开启")
                 if startReceiving && self.enabled {
                     self.receiveTask = Task { [weak self] in await self?.pollLoop(current) }
                 }
@@ -297,30 +299,43 @@ final class RelayController: ObservableObject {
         }
     }
 
+    private func sendFeedback(_ message: String) { status = message; onSendFeedback?(message) }
+
     func sendCurrentClipboard() {
-        guard isConfigured, !isSending, !isRegistering, deviceID != targetID,
-              devices.contains(where: { $0.id == targetID }),
-              let text = pasteboard.string(forType: .string), RelayPolicy.validText(text) else {
-            status = "请先连接并选择目标；仅支持非空纯文本，最多 32 KiB"; return
+        guard isConfigured else { sendFeedback("未发送：请先导入连接配置"); return }
+        guard !isRegistering else { sendFeedback("未发送：正在连接并刷新设备，请稍候"); return }
+        guard !isSending else { sendFeedback("正在发送上一条，请勿重复触发"); return }
+        guard deviceID != targetID, let destination = devices.first(where: { $0.id == targetID }) else {
+            sendFeedback("未发送：请在跨设备同步中选择默认发送目标"); return
         }
+        guard let text = pasteboard.string(forType: .string), !text.isEmpty else {
+            sendFeedback("未发送：剪贴板中没有纯文本"); return
+        }
+        guard RelayPolicy.validText(text) else { sendFeedback("未发送：纯文本超过 32 KiB"); return }
         guard !RelayCredential.isCredential(text) else {
-            status = "当前剪贴板是服务凭据，已阻止发送；请自行复制其他文本替换"; return
+            sendFeedback("已阻止发送连接密钥或配置，请复制普通文本后再试"); return
+        }
+        guard Date().timeIntervalSince(lastSendStarted) >= 1 else {
+            sendFeedback("已忽略过快的重复发送，请稍候再按"); return
         }
         let current = generation
+        let destinationName = destination.name
         let body: [String: Any] = ["id": UUID().uuidString, "source": deviceID, "target": targetID, "text": text, "ttl_seconds": 1200]
+        lastSendStarted = Date()
         isSending = true
+        sendFeedback("正在发送到 \(destinationName)…")
         sendTask = Task { [weak self] in
-            guard let self else { return }
+            guard let self, current == self.generation, !Task.isCancelled else { return }
             defer { if current == self.generation { self.isSending = false } }
             do {
                 _ = try await self.request("send", body: body)
                 guard current == self.generation, !Task.isCancelled else { return }
-                self.status = "服务器已接收（20 分钟内有效），不代表对端已复制"
+                self.sendFeedback("服务器已接收 → \(destinationName)；不代表对方已复制")
             } catch {
                 guard current == self.generation, !Task.isCancelled else { return }
                 if case Failure.http(let code) = error, code == 401 || code == 403 {
-                    self.setEnabled(false); self.status = "认证失败，已停止；更新凭证后手动开启"
-                } else { self.status = "发送结果未确认；可能已到达，请先检查对端再重发" }
+                    self.setEnabled(false); self.sendFeedback("未确认发送：API Key 无效，请重新导入连接配置")
+                } else { self.sendFeedback("发送结果未确认；可能已到达，请先检查 \(destinationName) 再重发") }
             }
         }
     }

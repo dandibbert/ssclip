@@ -88,6 +88,8 @@ struct HotKeyConfiguration: Codable, Equatable, Sendable {
 }
 
 extension HotKeyConfiguration {
+    static let defaultSend = HotKeyConfiguration(keyCode: 1, keyDisplayName: "S", usesCommand: true, usesOption: true, usesControl: true)
+
     /// 只比较按键与修饰键组合；显示名不参与判断。
     func sameCombo(as other: HotKeyConfiguration) -> Bool {
         keyCode == other.keyCode && carbonModifiers == other.carbonModifiers
@@ -198,6 +200,9 @@ final class AppSettings: ObservableObject {
     @Published var previewDelay: Double { didSet { persist() } }
     @Published var hotKey: HotKeyConfiguration { didSet { persist() } }
     @Published var hotKeyValidationMessage: String?
+    @Published var sendHotKey: HotKeyConfiguration { didSet { persist() } }
+    @Published var sendHotKeyEnabled: Bool { didSet { persist() } }
+    @Published var sendHotKeyValidationMessage: String?
     @Published var panelShortcuts: PanelShortcuts { didSet { persist() } }
 
     private let defaults: UserDefaults
@@ -214,6 +219,11 @@ final class AppSettings: ObservableObject {
         maximumItems = defaults.object(forKey: Keys.maximumItems) as? Int ?? 500
         previewDelay = defaults.object(forKey: Keys.previewDelay) as? Double ?? 1.5
         hotKeyValidationMessage = nil
+        sendHotKeyValidationMessage = nil
+        sendHotKeyEnabled = defaults.bool(forKey: Keys.sendHotKeyEnabled)
+        if let data = defaults.data(forKey: Keys.sendHotKey), let decoded = try? JSONDecoder().decode(HotKeyConfiguration.self, from: data) {
+            sendHotKey = decoded
+        } else { sendHotKey = .defaultSend }
         if let data = defaults.data(forKey: Keys.hotKey),
            let decoded = try? JSONDecoder().decode(HotKeyConfiguration.self, from: data) {
             hotKey = decoded
@@ -227,6 +237,18 @@ final class AppSettings: ObservableObject {
             panelShortcuts = PanelShortcuts()
         }
         isLoading = false
+    }
+
+    func sendHotKeyConflict(_ candidate: HotKeyConfiguration) -> String? {
+        if !candidate.isValid { return "请使用有效的按键组合" }
+        if candidate.sameCombo(as: hotKey) { return "与呼出剪贴板快捷键冲突" }
+        if panelShortcuts.conflicts(with: candidate) { return "与面板内快捷键冲突" }
+        let modifierCount = [candidate.usesCommand, candidate.usesOption, candidate.usesControl].filter { $0 }.count
+        if modifierCount < 2 { return "发送快捷键至少组合 ⌘、⌥、⌃ 中的两个，避免误触常用按键" }
+        if candidate.usesCommand && candidate.usesOption && !candidate.usesControl && [49, 53].contains(candidate.keyCode) {
+            return "此组合用于系统搜索或强制退出，请换一组"
+        }
+        return nil
     }
 
     var retentionCutoff: Date? {
@@ -251,6 +273,8 @@ final class AppSettings: ObservableObject {
         if let data = try? JSONEncoder().encode(hotKey) {
             defaults.set(data, forKey: Keys.hotKey)
         }
+        defaults.set(sendHotKeyEnabled, forKey: Keys.sendHotKeyEnabled)
+        if let data = try? JSONEncoder().encode(sendHotKey) { defaults.set(data, forKey: Keys.sendHotKey) }
         if let data = try? JSONEncoder().encode(panelShortcuts) {
             defaults.set(data, forKey: Keys.panelShortcuts)
         }
@@ -266,6 +290,8 @@ final class AppSettings: ObservableObject {
         static let maximumItems = "maximumItems"
         static let previewDelay = "previewDelay"
         static let hotKey = "hotKey"
+        static let sendHotKey = "sendHotKey"
+        static let sendHotKeyEnabled = "sendHotKeyEnabled"
         static let panelShortcuts = "panelShortcuts"
     }
 }
