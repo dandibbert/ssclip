@@ -11,6 +11,8 @@ ROOTS = [
     pathlib.Path('/System/Library/PrivateFrameworks/ActionKit.framework'),
     pathlib.Path('/System/Library/PrivateFrameworks/WorkflowUI.framework'),
     pathlib.Path('/System/Applications/Shortcuts.app'),
+    pathlib.Path('/System/Library/PrivateFrameworks/WorkflowActions.framework'),
+    pathlib.Path('/System/Library/Frameworks/Shortcuts.framework'),
 ]
 MAX_BYTES = 16 * 1024 * 1024
 META = {'UUID', 'CustomOutputName', 'GroupingIdentifier', 'WFControlFlowMode'}
@@ -22,6 +24,7 @@ for filename in sys.argv[1:] or ['Resources/SSClip-Send.unsigned.shortcut', 'Res
         used.setdefault(identifier, set()).update(action.get('WFWorkflowActionParameters', {}))
 
 registries, definitions, errors = [], {}, []
+inventory, candidate_summaries = [], []
 seen_paths = set()
 
 def collect(value, found):
@@ -58,10 +61,14 @@ def parameter_summary(value):
     return result
 
 for root in ROOTS:
+    record = {'path': str(root), 'exists': root.exists()}
+    inventory.append(record)
     if not root.exists():
         continue
     resolved_root = root.resolve()
     candidates = list(root.rglob('*.plist')) + list(root.rglob('*.json'))
+    record['candidate_count'] = len(candidates)
+    record['action_related_filenames'] = sorted(str(p) for p in root.rglob('*') if p.is_file() and ('action' in p.name.lower() or 'tool' in p.name.lower()))[:60]
     for path in sorted(candidates)[:2000]:
         try:
             real = path.resolve()
@@ -72,6 +79,8 @@ for root in ROOTS:
                 continue
             data = real.read_bytes()
             value = json.loads(data) if path.suffix == '.json' else plistlib.loads(data)
+            if len(candidate_summaries) < 80:
+                candidate_summaries.append({'path': str(real), 'size': len(data), 'root_type': type(value).__name__, 'top_keys': list(value)[:30] if isinstance(value, dict) else []})
             found = {}
             collect(value, found)
             if not found:
@@ -108,6 +117,8 @@ report = {
     'status': 'unverified_no_registry' if not registries else ('unknown_action_ids' if unknown else 'action_ids_verified_parameter_comparison_reported'),
     'limitations': 'macOS registry evidence is not iOS import/execution, variable-token evaluation, official signing or runtime permissions validation. Unknown parameter keys require review, not assumed valid.',
     'registry_files': registries,
+    'root_inventory': inventory,
+    'candidate_summaries': candidate_summaries,
     'matched_actions': matches,
     'unknown_action_ids': unknown,
     'read_error_count': len(errors),
