@@ -57,7 +57,7 @@ struct RelaySettingsView: View {
             DisclosureGroup("连接与高级设置", isExpanded: $advancedExpanded) {
                 advancedSettings.padding(.top, 8)
             }
-            Text("只在点击发送时上传纯文本，最多 32 KiB。服务端明文暂存，最长 20 分钟有效，不是端到端加密；本机收件箱与历史另行保留。不要发送密码等敏感信息。iPhone 接收可在管理端配置 Bark；Bark 最多 2000 UTF-8 字节并受通知总大小限制，不会截断文本。")
+            Text("只在点击发送时上传纯文本，最多 32 KiB。服务端明文暂存，最长 20 分钟有效，不是端到端加密；本机收件箱与历史另行保留。不要发送密码等敏感信息。iPhone 接收可在管理端配置 Bark；Bark 受 APNs 4096 字节总通知预算限制（含元数据），不会截断文本。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

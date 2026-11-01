@@ -66,7 +66,7 @@ for root in ROOTS:
     if not root.exists():
         continue
     resolved_root = root.resolve()
-    candidates = list(root.rglob('*.plist')) + list(root.rglob('*.json'))
+    candidates = [p for pattern in ['*.plist', '*.json', '*.intentdefinition', '*.actionsdata'] for p in root.rglob(pattern)]
     record['candidate_count'] = len(candidates)
     record['action_related_filenames'] = sorted(str(p) for p in root.rglob('*') if p.is_file() and ('action' in p.name.lower() or 'tool' in p.name.lower()))[:60]
     for path in sorted(candidates)[:2000]:
@@ -78,7 +78,10 @@ for root in ROOTS:
             if real.stat().st_size > MAX_BYTES:
                 continue
             data = real.read_bytes()
-            value = json.loads(data) if path.suffix == '.json' else plistlib.loads(data)
+            try:
+                value = plistlib.loads(data)
+            except (ValueError, plistlib.InvalidFileException):
+                value = json.loads(data)
             if len(candidate_summaries) < 80:
                 candidate_summaries.append({'path': str(real), 'size': len(data), 'root_type': type(value).__name__, 'top_keys': list(value)[:30] if isinstance(value, dict) else []})
             found = {}
@@ -91,7 +94,7 @@ for root in ROOTS:
                 # Prefer the registry with explicit parameter definitions over fallback metadata.
                 if identifier not in definitions or len(parameter_summary(definition)) > len(parameter_summary(definitions[identifier][0])):
                     definitions[identifier] = (definition, source)
-        except (OSError, ValueError, plistlib.InvalidFileException) as error:
+        except (OSError, ValueError, UnicodeDecodeError, plistlib.InvalidFileException) as error:
             errors.append({'path': str(path), 'error_type': type(error).__name__})
 
 matches, unknown = {}, []

@@ -4,7 +4,7 @@ import Testing
 struct RelayServiceErrorTests {
     @Test func barkSizeFailureExplainsLimitWithoutTruncation() {
         let message = RelayServiceError.message(for: "bark_text_too_large") ?? ""
-        #expect(message.contains("2000 UTF-8"))
+        #expect(message.contains("APNs 4096"))
         #expect(message.contains("未截断"))
     }
     @Test func unknownDeliveryDoesNotInviteBlindDuplicateSend() {
@@ -13,7 +13,7 @@ struct RelayServiceErrorTests {
         #expect(message.contains("避免重复"))
     }
     @Test func onlyExplicitCodesAreMapped() {
-        for code in ["bark_rejected", "bark_delivery_failed", "bark_delivery_in_progress", "bark_not_configured", "bark_credential_unavailable"] {
+        for code in ["bark_rejected", "bark_delivery_failed", "bark_delivery_in_progress", "bark_not_configured", "bark_credential_unavailable", "bark_dns_unavailable", "bark_private_address_blocked"] {
             #expect(RelayServiceError.message(for: code) != nil)
         }
         #expect(RelayServiceError.message(for: "unknown_secret_payload") == nil)
