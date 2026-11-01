@@ -4,7 +4,10 @@ import Foundation
 
 @MainActor
 final class RelayController: ObservableObject {
-    static let devices: [(id: String, name: String)] = [("mac-mini-test", "Mac mini"), ("macbook-test", "MacBook"), ("iphone-test", "iPhone（网页接收）")]
+    @Published private(set) var devices: [RelayDevice] = []
+    @Published private(set) var deviceName: String
+    @Published private(set) var isConfigured = false
+    @Published private(set) var isRegistering = false
     @Published private(set) var enabled = false
     @Published private(set) var isBatchMode = false
     @Published private(set) var serviceURL: String
@@ -21,25 +24,39 @@ final class RelayController: ObservableObject {
     private let pasteboard: NSPasteboard
     private let session: URLSession
     private let credentialReader: (String) -> String?
+    private let credentialWriter: (String, String) -> Bool
     private let sleepNanoseconds: UInt64
     private var receiveTask: Task<Void, Never>?
     private var sendTask: Task<Void, Never>?
+    private var registrationTask: Task<Void, Never>?
     private var generation = UUID()
+    private var connectionID = UUID()
+    private var registrationFailures = 0
     private var batchObservation: AnyCancellable?
     private var journalHealthy = true
     private var scope: String { serviceURL + "|" + deviceID }
+    var currentInbox: [RelayReceipt] { inbox.filter { $0.scope == scope && !$0.hidden } }
 
     init(model: AppModel, defaults: UserDefaults = .standard, directory: URL? = nil,
          session: URLSession? = nil, pasteboard: NSPasteboard = .general, credentialReader: @escaping (String) -> String? = RelayCredential.read,
-         sleepNanoseconds: UInt64 = 3_000_000_000) {
+         sleepNanoseconds: UInt64 = 3_000_000_000,
+         credentialWriter: @escaping (String, String) -> Bool = { RelayCredential.save($0, host: $1) },
+         automaticallyConnect: Bool = true) {
         self.model = model
         self.pasteboard = pasteboard
+        self.credentialWriter = credentialWriter
         self.credentialReader = credentialReader
         self.sleepNanoseconds = sleepNanoseconds
         self.defaults = defaults
-        serviceURL = defaults.string(forKey: "relay.url") ?? "https://ssclip-relay-lab.sgah81.chatgpt.site"
-        deviceID = defaults.string(forKey: "relay.device") ?? "mac-mini-test"
-        targetID = defaults.string(forKey: "relay.target") ?? "macbook-test"
+        serviceURL = defaults.string(forKey: "relay.v2.url") ?? ""
+        let savedID = defaults.string(forKey: "relay.deviceUUID") ?? ""
+        deviceID = UUID(uuidString: savedID) != nil ? savedID : UUID().uuidString.lowercased()
+        defaults.set(deviceID, forKey: "relay.deviceUUID")
+        var initialName = defaults.string(forKey: "relay.deviceName") ?? Host.current().localizedName ?? "我的 Mac"
+        initialName = String(String.UnicodeScalarView(initialName.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })).trimmingCharacters(in: .whitespacesAndNewlines)
+        while initialName.utf16.count > 80 { initialName.removeLast() }
+        deviceName = initialName.isEmpty ? "我的 Mac" : initialName
+        targetID = defaults.string(forKey: "relay.v2.target") ?? ""
         let root = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("SSClip")
         journalURL = root.appendingPathComponent("relay-inbox.json")
         let configuration = URLSessionConfiguration.ephemeral
@@ -62,59 +79,132 @@ final class RelayController: ObservableObject {
             if !model.removeRelayCredentialsFromHistory() { credentialWarning = "凭据的本地历史清理未能写入磁盘，请检查存储错误；旧历史文件可能仍含凭据。" }
         }
         batchObservation = model.$isBatchMode.sink { [weak self] value in self?.isBatchMode = value }
-        // First launch is opt-in; honor a previously saved user choice.
-        if defaults.bool(forKey: "relay.enabled") { setEnabled(true) }
+        isConfigured = defaults.integer(forKey: "relay.connectionVersion") == 1 && RelayPolicy.baseURL(serviceURL) != nil && hasCredential
+        if !isConfigured {
+            status = defaults.string(forKey: "relay.url") == nil ? "导入连接配置，即可开始" : "旧测试连接已停用，请从管理端导入新的 API Key 连接配置"
+        } else if automaticallyConnect {
+            if defaults.bool(forKey: "relay.v2.enabled") { setEnabled(true) } else { refreshDevices() }
+        }
     }
 
+    /// Validate and save the complete origin+key pair before changing the live connection.
+    /// A cancelled picker or invalid import never touches the previous configuration.
     @discardableResult
-    func configure(serviceURL: String, deviceID: String, targetID: String, token: String?) -> Bool {
-        setEnabled(false)
-        guard let url = RelayPolicy.baseURL(serviceURL.trimmingCharacters(in: .whitespacesAndNewlines)),
-              RelayPolicy.devices.contains(deviceID), deviceID != "iphone-test",
-              RelayPolicy.devices.contains(targetID), deviceID != targetID else {
-            status = "请填写 HTTPS 网站根地址，并选择不同的本机和目标设备"; return false
+    func importConfiguration(data: Data) -> Bool {
+        guard let configuration = RelayConnectionConfiguration.parse(data) else {
+            status = "配置未导入：格式、版本或 HTTPS 地址无效，原连接未改变"; return false
         }
-        let normalized = url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        if let token, !token.isEmpty {
-            guard !token.contains("\n"), !token.contains("\r"), RelayCredential.save(token, host: normalized) else {
-                status = "凭证未保存：请检查输入与钥匙串权限"; return false
+        let url = configuration.server_url.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard credentialWriter(configuration.api_key, url) else {
+            status = "配置未导入：钥匙串保存失败，原连接未改变"; return false
+        }
+        let sameOrigin = url == serviceURL
+        let resumeReceiving = sameOrigin && enabled
+        setEnabled(false)
+        RelayCredential.remember(configuration.api_key)
+        if let text = String(data: data, encoding: .utf8) { RelayCredential.remember(text) }
+        if model?.removeRelayCredentialsFromHistory() == false {
+            credentialWarning = "连接已保存，但历史清理写入失败；旧历史文件可能仍含连接秘密，请检查存储错误。"
+        }
+        serviceURL = url
+        defaults.set(url, forKey: "relay.v2.url")
+        defaults.set(1, forKey: "relay.connectionVersion")
+        devices = []
+        if !sameOrigin { targetID = ""; defaults.removeObject(forKey: "relay.v2.target") }
+        isConfigured = true
+        status = "连接已导入，正在注册本机；自动接收尚未开启"
+        if resumeReceiving { setEnabled(true) } else { refreshDevices() }
+        return true
+    }
+
+    func renameDevice(_ rawName: String) {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.utf16.count <= 80,
+              !name.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            status = "设备名称需为 1–80 个字符"; return
+        }
+        deviceName = name; defaults.set(name, forKey: "relay.deviceName")
+        if isConfigured { refreshDevices() }
+    }
+
+    func selectTarget(_ id: String) {
+        guard id != deviceID, devices.contains(where: { $0.id == id }) else { return }
+        targetID = id; defaults.set(id, forKey: "relay.v2.target")
+    }
+
+    func refreshDevices() { connect(startReceiving: enabled && receiveTask == nil) }
+
+    private func connect(startReceiving: Bool) {
+        guard isConfigured, hasCredential else { status = "请先导入管理端导出的连接配置"; return }
+        registrationTask?.cancel()
+        connectionID = UUID()
+        let connection = connectionID
+        let current = generation
+        isRegistering = true
+        registrationTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if current == self.generation && connection == self.connectionID { self.isRegistering = false } }
+            do {
+                _ = try await self.request("register", body: ["id": self.deviceID, "name": self.deviceName, "platform": "macos"])
+                let list = try JSONDecoder().decode(RelayDevicesResponse.self, from: await self.request("devices"))
+                guard current == self.generation, !Task.isCancelled else { return }
+                guard list.devices.count <= 128, Set(list.devices.map(\.id)).count == list.devices.count,
+                      list.devices.contains(where: { $0.id == self.deviceID }),
+                      list.devices.allSatisfy({ RelayPolicy.validDeviceID($0.id) && !$0.name.isEmpty && $0.name.utf16.count <= 80 && $0.last_seen_at.isFinite && ["macos", "ios", "web"].contains($0.platform) }) else { throw Failure.invalid }
+                self.registrationFailures = 0
+                self.devices = list.devices.sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
+                if !self.devices.contains(where: { $0.id == self.targetID && $0.id != self.deviceID }) {
+                    self.targetID = self.devices.first(where: { $0.id != self.deviceID })?.id ?? ""
+                    self.defaults.set(self.targetID, forKey: "relay.v2.target")
+                }
+                self.status = self.targetID.isEmpty ? "本机已连接；请在另一台设备导入同一配置，然后刷新设备" : (self.enabled ? "已连接，等待新消息" : "已连接，可手动发送；自动接收未开启")
+                if startReceiving && self.enabled {
+                    self.receiveTask = Task { [weak self] in await self?.pollLoop(current) }
+                }
+            } catch {
+                guard current == self.generation, !Task.isCancelled else { return }
+                if case Failure.http(let code) = error, code == 401 || code == 403 {
+                    self.setEnabled(false); self.status = "API Key 无效或已撤销；请重新导入连接配置"
+                } else {
+                    if case Failure.invalid = error {
+                        self.setEnabled(false); self.status = "服务端响应不兼容，连接配置已保留；请检查服务端"; return
+                    }
+                    if case Failure.http(let code) = error, (400...499).contains(code), code != 429 {
+                        self.setEnabled(false); self.status = "服务端拒绝注册，请检查连接配置与设备数量"; return
+                    }
+                    self.registrationFailures = min(5, self.registrationFailures + 1)
+                    self.status = "暂时无法连接，正在自动重试；已保留自动接收选择"
+                    try? await Task.sleep(nanoseconds: min(60_000_000_000, self.sleepNanoseconds * UInt64(1 << self.registrationFailures)))
+                    guard current == self.generation, connection == self.connectionID, !Task.isCancelled else { return }
+                    self.connect(startReceiving: startReceiving)
+                }
             }
         }
-        if let token, !token.isEmpty {
-            RelayCredential.remember(token)
-            if model?.removeRelayCredentialsFromHistory() == false { credentialWarning = "凭据已存钥匙串，但历史清理保存失败；旧历史文件可能仍含凭据，请检查存储错误。" }
-        }
-        self.serviceURL = normalized; self.deviceID = deviceID; self.targetID = targetID
-        defaults.set(normalized, forKey: "relay.url")
-        defaults.set(deviceID, forKey: "relay.device")
-        defaults.set(targetID, forKey: "relay.target")
-        status = "设置已保存，请手动开启同步"; return true
     }
 
     func setEnabled(_ value: Bool) {
         generation = UUID()
         receiveTask?.cancel(); receiveTask = nil
+        registrationTask?.cancel(); registrationTask = nil; isRegistering = false
         sendTask?.cancel(); sendTask = nil; isSending = false
         enabled = false
-        defaults.set(false, forKey: "relay.enabled")
-        guard value else { status = "同步未启用"; return }
-        guard journalHealthy, RelayPolicy.baseURL(serviceURL) != nil,
-              RelayPolicy.devices.contains(deviceID), deviceID != "iphone-test", hasCredential else {
-            status = "请先保存有效地址、本机设备和服务凭证"; return
+        defaults.set(false, forKey: "relay.v2.enabled")
+        guard value else { status = "自动接收已关闭；仍可手动发送"; return }
+        guard journalHealthy, isConfigured, RelayPolicy.validDeviceID(deviceID), hasCredential else {
+            status = journalHealthy ? "请先导入有效连接配置" : "收件箱无法读取；为防止重复覆盖，自动接收已停止"; return
         }
-        defaults.set(true, forKey: "relay.enabled")
+        defaults.set(true, forKey: "relay.v2.enabled")
         enabled = true; status = "正在连接（启动时旧消息只进收件箱）"
-        let current = generation
-        receiveTask = Task { [weak self] in await self?.pollLoop(current) }
+        connect(startReceiving: true)
     }
 
     private enum Failure: Error { case http(Int), invalid, storage }
     private func request(_ endpoint: String, body: [String: Any]? = nil) async throws -> Data {
         guard let base = RelayPolicy.baseURL(serviceURL), let credential = credentialReader(serviceURL) else { throw Failure.invalid }
         var components = URLComponents(url: base.appendingPathComponent("api/service/" + endpoint), resolvingAgainstBaseURL: false)!
-        if body == nil { components.queryItems = [URLQueryItem(name: "target", value: deviceID)] }
+        if body == nil && (endpoint == "poll" || endpoint == "status") { components.queryItems = [URLQueryItem(name: "target", value: deviceID)] }
         var req = URLRequest(url: components.url!)
-        req.setValue("Bearer " + credential, forHTTPHeaderField: "OAI-Sites-Authorization")
+        req.setValue("Bearer " + credential, forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body {
             req.httpMethod = "POST"
@@ -168,11 +258,15 @@ final class RelayController: ObservableObject {
                     // Bounded durable inbox: preserve recent receipts for deduplication.
                     inbox.removeAll { !$0.pendingAck && Date().timeIntervalSince($0.receivedAt) > 86_400 }
                     guard inbox.count < 1000 else { throw Failure.storage }
-                    let receipt = RelayReceipt(id: message.id, text: message.text, source: message.source,
-                                               receivedAt: Date(), scope: scope, pendingAck: true)
+                    let sensitive = RelayCredential.isCredential(message.text)
+                    let receipt = RelayReceipt(id: message.id, text: sensitive ? "" : message.text, source: message.source,
+                                               receivedAt: Date(), scope: scope, pendingAck: true, hidden: sensitive)
                     inbox.insert(receipt, at: 0)
                     do { try persist() } catch { inbox.removeAll { $0.id == receipt.id && $0.scope == receipt.scope }; throw Failure.storage }
                     // Persist BEFORE clipboard side effect. A crash/retry must not overwrite again.
+                    if sensitive {
+                        status = "已拦截连接密钥或配置消息，未保存正文或复制"; received += 1; continue
+                    }
                     let localQuietFor = min(Date().timeIntervalSince(model?.lastClipboardActivity ?? Date()), Date().timeIntervalSince(lastObservedChangeAt))
                     let messageAge = (response.server_time - message.created_at) / 1000
                     let canCopy = localQuietFor > max(3, messageAge + 1) && RelayPolicy.mayAutoCopy(created: message.created_at, serverTime: response.server_time,
@@ -203,9 +297,10 @@ final class RelayController: ObservableObject {
     }
 
     func sendCurrentClipboard() {
-        guard enabled, !isSending, deviceID != targetID,
+        guard isConfigured, !isSending, !isRegistering, deviceID != targetID,
+              devices.contains(where: { $0.id == targetID }),
               let text = pasteboard.string(forType: .string), RelayPolicy.validText(text) else {
-            status = "请先开启同步；仅支持非空纯文本，最多 32 KiB"; return
+            status = "请先连接并选择目标；仅支持非空纯文本，最多 32 KiB"; return
         }
         guard !RelayCredential.isCredential(text) else {
             status = "当前剪贴板是服务凭据，已阻止发送；请自行复制其他文本替换"; return

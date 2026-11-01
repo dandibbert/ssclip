@@ -124,12 +124,12 @@ private struct RelayMenuContent: View {
         Button("发送当前纯文本 → \(destinationName)") {
             relay.sendCurrentClipboard()
         }
-        .disabled(!relay.enabled || relay.isSending)
+        .disabled(!relay.isConfigured || relay.isSending || relay.isRegistering || !relay.devices.contains(where: { $0.id == relay.targetID && $0.id != relay.deviceID }))
         Text(relay.status)
             .font(.caption)
     }
 
     private var destinationName: String {
-        RelayController.devices.first(where: { $0.id == relay.targetID })?.name ?? relay.targetID
+        relay.devices.first(where: { $0.id == relay.targetID })?.name ?? "选择目标设备"
     }
 }

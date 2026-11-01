@@ -73,6 +73,32 @@ struct RelayPolicyTests {
         #expect(decoded.pendingAck)
     }
 
+    @Test func connectionConfigurationRejectsInvalidSchemaURLKeysAndOversizedFiles() throws {
+        func data(_ overrides: [String: Any] = [:]) throws -> Data {
+            let base: [String: Any] = ["format": "ssclip-connection", "version": 1,
+                "server_url": "https://relay.example.test", "api_key": "synthetic_unit_test_api_key_1234567890"]
+            return try JSONSerialization.data(withJSONObject: base.merging(overrides) { _, new in new })
+        }
+        #expect(RelayConnectionConfiguration.parse(try data()) != nil)
+        let invalid: [[String: Any]] = [
+            ["format": "other"], ["version": 2], ["version": true], ["server_url": "http://relay.example.test"],
+            ["server_url": "https://user:key@relay.example.test"], ["server_url": "https://relay.example.test?key=x"],
+            ["server_url": "https://relay.example.test/api"], ["api_key": "short"],
+            ["api_key": String(repeating: "a", count: 257)], ["api_key": String(repeating: "a", count: 32) + "\n"],
+            ["api_key": String(repeating: "中", count: 32)], ["extra": String(repeating: "a", count: 16384)]
+        ]
+        for override in invalid { #expect(RelayConnectionConfiguration.parse(try data(override)) == nil) }
+        #expect(RelayCredential.isCredential(String(data: try data(), encoding: .utf8)!))
+    }
+
+    @Test func dynamicDeviceIDsUseBoundedASCIIWithoutFixedLabels() {
+        #expect(RelayPolicy.validDeviceID(UUID().uuidString))
+        #expect(RelayPolicy.validDeviceID("web-browser-123"))
+        #expect(!RelayPolicy.validDeviceID("short"))
+        #expect(!RelayPolicy.validDeviceID("bad.id.123"))
+        #expect(!RelayPolicy.validDeviceID(String(repeating: "a", count: 97)))
+    }
+
     private func message(id: String = "message_123", source: String = "iphone-test", target: String = "mac-mini-test",
                          text: String = "hello", created: Double = 999_000, expires: Double = 1_010_000) -> RelayMessage {
         RelayMessage(id: id, source: source, target: target, text: text, created_at: created, expires_at: expires)

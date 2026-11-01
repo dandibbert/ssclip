@@ -303,7 +303,7 @@ struct SettingsView: View {
             SettingsSection(title: "系统权限") {
                 SettingsRow(verticalPadding: 10) {
                     VStack(alignment: .leading, spacing: 9) {
-                        Text("直接粘贴需要 macOS“辅助功能”权限。历史保存在本机；只有主动开启跨设备同步时才会连接服务端。")
+                        Text("直接粘贴需要 macOS“辅助功能”权限。历史保存在本机；导入连接配置后才会连接服务端，自动接收可独立开关。")
                             .font(.system(size: 10.5))
                             .foregroundStyle(.secondary)
                         Button("打开辅助功能设置") {

@@ -12,11 +12,12 @@ enum RelayCredential {
         if !hashes.contains(hash) { hashes.append(hash); UserDefaults.standard.set(hashes, forKey: "relay.credentialHashes") }
     }
     static func isCredential(_ text: String) -> Bool {
-        (UserDefaults.standard.stringArray(forKey: "relay.credentialHashes") ?? []).contains(fingerprint(text))
+        if let data = text.data(using: .utf8), RelayConnectionConfiguration.parse(data) != nil { return true }
+        return (UserDefaults.standard.stringArray(forKey: "relay.credentialHashes") ?? []).contains(fingerprint(text))
     }
     private static func query(_ host: String) -> [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
-         kSecAttrService as String: "SSClip.SitesRelay", kSecAttrAccount as String: host]
+         kSecAttrService as String: "SSClip.RelayAPIKey.v1", kSecAttrAccount as String: host]
     }
     static func read(_ host: String) -> String? {
         var q = query(host)
