@@ -18,6 +18,8 @@ struct IOSShortcutExporterTests {
         #expect(try Data(contentsOf: files.output) == Data("AEA1synthetic-signed-output-for-unit-test".utf8))
         #expect(try Data(contentsOf: files.input) == files.original)
         #expect(exporter.status.contains("已生成签名快捷指令"))
+        #expect(exporter.status.contains("每次发送选择接收设备"))
+        #expect(!exporter.status.contains("默认"))
     }
 
     @Test func missingICloudDoesNotReplaceExistingDestinationOrExposeDiagnostics() async throws {
@@ -92,25 +94,6 @@ struct IOSShortcutExporterTests {
         try await finished(exporter)
         #expect(try Data(contentsOf: files.output) == files.previous)
         #expect(exporter.status.contains("未保存安装文件"))
-    }
-
-    @Test func optionalSettingsEntryUsesItsOwnBundledTemplate() async throws {
-        let files = try fixture()
-        defer { try? FileManager.default.removeItem(at: files.root) }
-        let settingsInput = files.root.appendingPathComponent("settings.unsigned.shortcut")
-        try Data("settings-template-fixture".utf8).write(to: settingsInput)
-        let exporter = IOSShortcutExporter(templateURL: { files.input }, settingsTemplateURL: { settingsInput }, signer: { input, output in
-            #expect(input.lastPathComponent == "SSClip设置.shortcut")
-            #expect(try Data(contentsOf: input) == Data(contentsOf: settingsInput))
-            #expect(output.lastPathComponent == "SSClip设置.shortcut")
-            try Data("AEA1synthetic-signed-settings-for-unit-test".utf8).write(to: output)
-            return ShortcutSigningResult(exitCode: 0, diagnostic: "")
-        })
-        exporter.beginExport(to: files.output, template: .settings)
-        try await finished(exporter)
-        #expect(exporter.status.contains("已生成签名设置入口"))
-        #expect(exporter.status.contains("SSClip发送"))
-        #expect(try Data(contentsOf: settingsInput) == Data("settings-template-fixture".utf8))
     }
 
     @Test func cannotOverwriteOriginalTemplate() async throws {

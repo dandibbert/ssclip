@@ -131,7 +131,10 @@ final class RelayController: ObservableObject {
     }
 
     func selectTarget(_ id: String) {
-        guard id != deviceID, devices.contains(where: { $0.id == id }) else { return }
+        if id.isEmpty {
+            targetID = ""; defaults.removeObject(forKey: "relay.v2.target"); return
+        }
+        guard id != deviceID, devices.contains(where: { $0.id == id && $0.canReceive }) else { return }
         targetID = id; defaults.set(id, forKey: "relay.v2.target")
     }
 
@@ -156,11 +159,14 @@ final class RelayController: ObservableObject {
                       list.devices.allSatisfy({ RelayPolicy.validDeviceID($0.id) && !$0.name.isEmpty && $0.name.utf16.count <= 80 && $0.last_seen_at.isFinite && ["macos", "ios", "web"].contains($0.platform) }) else { throw Failure.invalid }
                 self.registrationFailures = 0
                 self.devices = list.devices.sorted { $0.name == $1.name ? $0.id < $1.id : $0.name < $1.name }
-                if !self.devices.contains(where: { $0.id == self.targetID && $0.id != self.deviceID }) {
+                let hadDefaultTarget = !self.targetID.isEmpty
+                if !self.devices.contains(where: { $0.id == self.targetID && $0.id != self.deviceID && $0.canReceive }) {
                     self.targetID = ""
                     self.defaults.set(self.targetID, forKey: "relay.v2.target")
                 }
-                self.status = self.targetID.isEmpty ? "本机已连接；请选择默认发送目标（不会自动改选其他设备）" : (self.enabled ? "已连接，等待新消息" : "已连接，可手动发送；自动接收未开启")
+                self.status = self.targetID.isEmpty
+                    ? (hadDefaultTarget ? "原默认设备已不可用，未自动换目标；请重新选择，或临时选择设备发送" : "本机已连接；可临时选设备发送，或设置快捷键的默认目标")
+                    : (self.enabled ? "已连接，等待新消息" : "已连接，可手动发送；自动接收未开启")
                 if startReceiving && self.enabled {
                     self.receiveTask = Task { [weak self] in await self?.pollLoop(current) }
                 }
@@ -308,12 +314,13 @@ final class RelayController: ObservableObject {
 
     private func sendFeedback(_ message: String) { status = message; onSendFeedback?(message) }
 
-    func sendCurrentClipboard() {
+    func sendCurrentClipboard(to temporaryTargetID: String? = nil) {
+        let sendingTargetID = temporaryTargetID ?? targetID
         guard isConfigured else { sendFeedback("未发送：请先导入连接配置"); return }
         guard !isRegistering else { sendFeedback("未发送：正在连接并刷新设备，请稍候"); return }
         guard !isSending else { sendFeedback("正在发送上一条，请勿重复触发"); return }
-        guard deviceID != targetID, let destination = devices.first(where: { $0.id == targetID }) else {
-            sendFeedback("未发送：请在跨设备同步中选择默认发送目标"); return
+        guard deviceID != sendingTargetID, let destination = devices.first(where: { $0.id == sendingTargetID && $0.canReceive }) else {
+            sendFeedback(temporaryTargetID == nil ? "未发送：请在跨设备同步中选择默认发送目标" : "未发送：所选设备已不可用，请刷新设备后重选"); return
         }
         guard let text = pasteboard.string(forType: .string), !text.isEmpty else {
             sendFeedback("未发送：剪贴板中没有纯文本"); return
@@ -327,7 +334,7 @@ final class RelayController: ObservableObject {
         }
         let current = generation
         let destinationName = destination.name
-        let body: [String: Any] = ["id": UUID().uuidString, "source": deviceID, "target": targetID, "text": text, "ttl_seconds": 1200]
+        let body: [String: Any] = ["id": UUID().uuidString, "source": deviceID, "target": sendingTargetID, "text": text, "ttl_seconds": 1200]
         lastSendStarted = Date()
         isSending = true
         sendFeedback("正在发送到 \(destinationName)…")

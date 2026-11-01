@@ -10,7 +10,7 @@ def walk(x):
  elif isinstance(x,list):
   for v in x:yield from walk(v)
 
-for filename in ['SSClip发送_unsigned.shortcut','SSClip设置_unsigned.shortcut']:
+for filename in ['SSClip发送_unsigned.shortcut']:
  path=ROOT/filename;p=plistlib.loads(path.read_bytes())
  references={v['OutputUUID'] for v in walk(p) if isinstance(v,dict) and 'OutputUUID' in v}
  seen=set()

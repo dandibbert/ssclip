@@ -17,7 +17,7 @@ ROOTS = [
 MAX_BYTES = 16 * 1024 * 1024
 META = {'UUID', 'CustomOutputName', 'GroupingIdentifier', 'WFControlFlowMode'}
 used = {}
-for filename in sys.argv[1:] or ['Resources/SSClip-Send.unsigned.shortcut', 'Resources/SSClip-Settings.unsigned.shortcut']:
+for filename in sys.argv[1:] or ['Resources/SSClip-Send.unsigned.shortcut']:
     value = plistlib.loads(pathlib.Path(filename).read_bytes())
     for action in value['WFWorkflowActions']:
         identifier = action['WFWorkflowActionIdentifier']

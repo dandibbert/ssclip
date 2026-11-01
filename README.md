@@ -90,4 +90,4 @@ scripts/          本地应用打包与图标工具
 
 ### iPhone 入口
 
-在 Mac 的跨设备同步设置中点击“生成 iPhone 快捷指令”，由本人已登录 iCloud 的 Mac 使用 Apple 官方工具签名，再 AirDrop 到 iPhone。首次只选连接 JSON 和默认 Mac，之后点一次发送。另有“生成 iPhone 设置入口”用于重新配置。配置模板无生产密钥；云 CI 未登录 iCloud，未预签名。用户已验证旧版的本机签名与 iPhone 安装链路，但发现连接配置识别错误；本次修复版需重新生成并替换快捷指令，配置与发送仍待 iPhone 验证。详见 [iOS 模板说明](Shortcuts/IOS-SHORTCUT-NOTES.md) 与 [安装指南](RELAY-TESTING.md)。
+在 Mac 的跨设备同步设置中点击“生成 iPhone 快捷指令”，由本人已登录 iCloud 的 Mac 官方签名，再 AirDrop 到 iPhone。只需“SSClip发送”：首次导入连接 JSON，以后每次发送选择当次接收设备；选择列表内可“更换连接配置…”。已有旧版连接自动沿用，旧“SSClip设置”可以删除。Mac 自身默认目标与全局发送快捷键不变。模板无生产密钥；云 CI 无法预签名。上一版已由用户确认 iPhone 设置成功，本轮简化流程仍待实机验证。详见 [iOS 模板说明](Shortcuts/IOS-SHORTCUT-NOTES.md) 与 [安装指南](RELAY-TESTING.md)。

@@ -125,7 +125,7 @@ private struct RelayMenuContent: View {
         Button("发送当前纯文本 → \(destinationName)  \(shortcutLabel)") {
             relay.sendCurrentClipboard()
         }
-        .disabled(!relay.isConfigured || relay.isSending || relay.isRegistering || !relay.devices.contains(where: { $0.id == relay.targetID && $0.id != relay.deviceID }))
+        .disabled(!relay.isConfigured || relay.isSending || relay.isRegistering || !relay.devices.contains(where: { $0.id == relay.targetID && $0.id != relay.deviceID && $0.canReceive }))
         Text(relay.status)
             .font(.caption)
     }
@@ -135,8 +135,8 @@ private struct RelayMenuContent: View {
     }
 
     private var destinationName: String {
-        guard let target = relay.devices.first(where: { $0.id == relay.targetID }) else { return "未选择默认目标" }
+        guard let target = relay.devices.first(where: { $0.id == relay.targetID && $0.canReceive }) else { return "未选择默认目标" }
         let duplicates = relay.devices.filter { $0.name == target.name }.count > 1
-        return duplicates ? "\(target.name) · \(target.id.prefix(6))" : target.name
+        return duplicates ? "\(target.name) · \(target.id)" : target.name
     }
 }

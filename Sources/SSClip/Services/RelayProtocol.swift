@@ -62,6 +62,12 @@ struct RelayDevice: Codable, Identifiable {
     let name: String
     let platform: String
     let last_seen_at: Double
+    let can_receive: Bool?
+    let transport: String?
+    // This client has no native iOS queue receiver: only Bark iOS targets are usable.
+    var canReceive: Bool {
+        id != "ios-shortcut-sender" && (can_receive ?? true) && (platform != "ios" || transport == "bark")
+    }
 }
 struct RelayDevicesResponse: Decodable { let devices: [RelayDevice]; let server_time: Double }
 struct RelayConnectionConfiguration: Codable {

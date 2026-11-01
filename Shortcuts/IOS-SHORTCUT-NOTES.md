@@ -1,45 +1,25 @@
-# SSClip iOS 发送快捷指令 — unsigned 模板
+# SSClip发送：单快捷指令、每次选择设备
 
-**这两个文件不是已经可安装的成品。** 当前 GitHub macOS runner 的 Apple 官方 `shortcuts sign --mode anyone` 因未登录 iCloud 失败；需要由已登录 Apple 账户的授权 Mac 进行官方签名，再把签名后的文件发到 iPhone。不要绕过此限制，也不要把含真实 API Key 的已配置快捷指令送到第三方签名服务。
+## 使用
+1. 在 Mac SSClip 中生成并通过 Apple 官方方式签名 `SSClip发送.shortcut`，在 iPhone 安装。只保留这一个快捷指令；旧“SSClip设置”可以删除。
+2. 已成功导入过配置的 iPhone 无须重导入：沿用私有 state 的 server_url/api_key ；忽略旧 target_id/target_name，也不再读取旧 phone-id.txt。
+3. 首次无配置时选择自己管理端导出的连接 JSON，确认实际 HTTPS 服务地址。注册成功后只保存连接，本次不读取或发送剪贴板。
+4. 日常复制纯文本，运行“SSClip发送”，每次从实时设备列表选择本次接收设备（Mac 或已启用 Bark 的 iPhone/iPad）。取消不会发送，不保存默认目标。
+5. 同一列表最后的“更换连接配置…”可重新导入；即使没有接收设备，也保留此入口。重新导入只保存连接，不发送。此入口内部调用同一快捷指令，因此请保留名称 **SSClip发送**。
 
-## 签名后的用户流程
+## 边界与安全
+- 设备标签包含完整 ID，同名设备不会混淆。目标仅取本次列表选择，不回退旧设备。
+- 配置及 API Key 明文保存在本人 iCloud Drive/Shortcuts/SSClip/connection-state.json。勿分享配置/状态文件或快捷指令运行详情。同一 iCloud 账号的 iPhone/iPad 可共用该连接配置。所有快捷指令均注册为固定逻辑发送端 `ios-shortcut-sender` / “iOS 快捷指令”，`can_receive:false`；这不是某台物理手机身份，也不会出现在接收目标中。每台 iOS 的接收由各自独立 Bark 目标承担。旧 phone-id.txt 不再读取或修改。
+- 严格 HTTPS 根地址，允许 ASCII 域名/IPv4、端口；不允许用户信息、路径、查询或片段，IPv6 请用域名。Shortcuts 原生 HTTP 无法在此模板中保证拒绝重定向，只信任自己管理端导出且控制的服务。
+- 只接受文本类型；图片/文件不会转 OCR 或读内容上传。英文和中文系统文本标签已列入安全白名单，其他语言可能安全拒绝。
+- 空文本、当前 API Key、疑似完整连接 JSON 被阻止。正文 32 KiB UTF-8 上限由服务端执行；没有复杂客户端字节算术。
+- 成功只说明服务器接收，不保证接收设备已收到或复制；HTTP/未知结果不自动重试。20 分钟有效。
+- 缺少 format、标记不匹配、缺少 version、版本不支持、URL/key 格式错误分类反馈，不回显值。已解析的本地版本/URL/key 无效、注册返回失败或身份不匹配时，直接提供“重新导入连接配置／取消”，取消不改旧配置，不涉及物理手机身份。损坏 JSON、原生文件或 HTTP 网络错误可能由系统提前终止，无法用此模板捕获；先恢复网络/服务再重试，若仍失败请反馈系统错误，不要求删除状态文件。
 
-1. 在 iPhone 安装主快捷指令，名称必须保留 **SSClip发送**。可选安装 **SSClip设置**，以后改目标或重新导入时使用。
-2. 第一次运行“SSClip发送”，选管理端导出的 `ssclip-connection…json`，再选默认 Mac。此过程不读取或发送剪贴板。
-3. 按系统提示允许访问本人 iCloud Drive 的 Shortcuts 文件夹与自己的 SSClip 域名。配置完成后，复制文本，再运行“SSClip发送”即可。
-4. 日常不再选择文件或目标。可把主快捷指令加入主屏幕、操作按钮或轻点背面；这些系统入口需要用户自行选择。
-5. 需要换默认 Mac 或配置，运行“SSClip设置”。**不要重命名主快捷指令**，设置入口通过固定名称调用它。
+## 构建与验证事实
+- 使用官方 Cherri v2.3.0 二进制，`--skip-sign`，禁用 `--derive-uuids`。所有字典键用显式原生 getvalueforkey，不用属性语法。`normalize_shortcuts.py` 清理错误命名变量输出元数据。
+- 当前只有一个模板：457 个原生 actions，2707 项结构/隐私/实际字典 fixture/旧状态兼容/控制流检查通过。`build_unsigned.py` 只生成发送模板，不生成设置 helper。
+- 用户已在 iPhone 安装旧版并验证修复后的配置成功；尚不能据此声称发送成功。此轮“每次选择设备”新模板仍需重新签名、安装并实机验证。静态测试不是 iOS 模拟器。
+- 签名输入和输出均使用名称 `SSClip发送.shortcut`；资源 `SSClip-Send.unsigned.shortcut` 本身未签名。不要把 unsigned 文件当作现成可安装文件。
 
-## 行为与限制
-
-- 模板使用配置中的 `server_url`，严格限制为 HTTPS 根地址（支持 ASCII 域名/IPv4 和可选 1–65535 端口；拒绝账号密码、路径、查询、片段、控制字符，本版 IPv6 请使用域名）。首次/重新导入会显示实际地址，须用户明确确认后才发送 Key 与设备名。只导入本人可信管理端导出的文件。Shortcuts HTTP action 没有使用可验证的禁止重定向参数，因此不声称具备 Mac 客户端同等的重定向拒绝保证；服务端应保持这些 API 无重定向。
-- Key 仅来自用户选择的文件，放 `Authorization: Bearer` header，不进 URL、通知、剪贴板或公开产物默认值。动态正文通过原生 Dictionary/JSON 请求字段序列化，保留中文、emoji、换行、引号和反斜线。
-- 发送正文由服务端执行 32 KiB UTF-8 上限；快捷指令不再自行做复杂 Base64/算术预检。超过限制不得报成功。
-- 状态明文保存在本人 **iCloud Drive / Shortcuts / SSClip / connection-state.json**；手机路由 ID 独立保存在 `phone-id.txt`，首次生成后持久保留。这里是随机 `ios-…` 路由 ID，不是 Apple 硬件标识或权限凭据。不要分享这些文件。iCloud 同账号多台 iPhone 会共享这些文件，本版针对用户的一台 iPhone；不能宣称多手机隔离。
-- 每次先注册本机、读取设备列表，只允许 `platform=macos` 的目标。原目标消失则停止，不偷偷改发另一台。首次或设置模式选择成功后才写连接状态；取消文件/列表选择不覆盖旧连接。
-- 图片和文件通过 Get Type 检查拒绝，不做 OCR。允许 Text/Rich Text 及中英文对应类型名；其他语言系统的类型标签未现场验证。
-- 空内容、已知 API Key、疑似完整连接配置不会发送。重复 Create Folder 的行为尚待实机验证。
-- 一次运行只 POST send 一次，不自动重试。只有返回 ID 匹配且 `state=pending` 才提示“服务器已接收”，不表示 Mac 已复制。`acknowledged` 仅提示服务器记录接收端确认，不谎称剪贴板已写入。网络/系统动作错误可能由 Shortcuts 原生错误界面呈现，停止运行；不要盲目重发。
-- 旧状态损坏时，可运行“SSClip设置”并选“重新导入连接配置”，该分支会跳过旧 JSON 解析。若 `phone-id.txt` 损坏，需要在文件 App 删除该身份文件后重新运行（会注册为新手机）。
-
-## 构建与证据
-
-- 编译器：Cherri **v2.3.0**，通过 `--skip-sign` 明确禁用签名；没有请求第三方签名服务。
-- 编译器 release：`https://github.com/electrikmilk/cherri/releases/tag/v2.3.0`
-- Linux x86_64 release ZIP SHA256：`7ab2c384b7b26e7c72a30a8dfa56f89dae12c4068b7951bc1e3193f3698edbe9`
-- 源：`SSClip-send.cherri`、`SSClip-settings.cherri`。
-- 运行 `CHERRI=/path/to/cherri python3 build_unsigned.py` 可重建。
-- 主模板 392 个原生 actions；可选设置模板 4 个 actions。验证包括实际生成的字典读取动作、合法/非法配置 fixture、控制流分组栈、引用、隐私参数；仍非 iOS 运行模拟。
-- 禁用 Cherri --derive-uuids（它会复用独立 If 的分组 ID）；所有字典键改用显式 getvalueforkey 动作，不用对象属性语法。normalize 清除命名变量的错误 OutputUUID 元数据。
-- 尚未验证：Apple 签名成功、iPhone 导入、iCloud 文件 action 实际运行、系统授权交互及生产端到端发送。因此不能以静态验证替代真实安装成功声明。
-
-## 主要依据
-
-- Apple 官方命令行签名说明：https://support.apple.com/guide/shortcuts-mac/apd455c82f02/mac
-- Cherri 编译器、原生 action 定义：https://github.com/electrikmilk/cherri
-- Get File / Save File 原生参数定义（scpl 项目提取的 action schema）：https://docs.scpl.dev/actions/getfile 与 https://docs.scpl.dev/actions/savefile
-
-### 实机进展（2026-11-01 修订）
-旧版已由用户在 Mac 官方签名后安装到 iPhone，并真实运行到选择连接配置；因此“签名 → 安装”链路已有用户使用证据。旧版在合法配置识别处失败，尚未证明注册/发送成功。本次修复模板需要重新签名、替换并在 iPhone 重试；不能把结构回归通过写成修复版实机通过。
-
-配置错误提示分别区分缺少 format、format 标记不匹配、缺少 version、版本不支持、URL 不合规和 API Key 格式错误，不回显值。无法解析的 JSON 由系统“获取字典”动作直接报错；模板没有伪装成可捕获全部原生错误。
+接收列表只列 macos 或 platform=ios 且 transport=bark；普通旧 iOS relay 注册记录不作为收件端。显式 can_receive:false 接收端也排除：原生字典转 JSON 后匹配 JSON 布尔 false，不依赖本地化“是/否”文本；字段缺失兼容旧服务，字符串 "false" 不当作布尔。共享发送源另按固定 ID 排除。Bark 返回 pending/submitted 时仍只显示服务端接受，不代表手机已收到。

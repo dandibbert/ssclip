@@ -1,11 +1,8 @@
 #!/bin/zsh
 set -eu
 SCRIPT_DIR=${0:A:h}
-case "${1:-send}" in
-  send) TEMPLATE="$SCRIPT_DIR/SSClip-Send.unsigned.shortcut"; NAME="SSClip发送.shortcut" ;;
-  settings) TEMPLATE="$SCRIPT_DIR/SSClip-Settings.unsigned.shortcut"; NAME="SSClip设置.shortcut" ;;
-  *) print '用法：Sign-on-Mac.command [send|settings]'; exit 1 ;;
-esac
+TEMPLATE="$SCRIPT_DIR/SSClip-Send.unsigned.shortcut"
+NAME="SSClip发送.shortcut"
 if [[ ! -s "$TEMPLATE" && -s "$SCRIPT_DIR/../Resources/${TEMPLATE:t}" ]]; then
   TEMPLATE="$SCRIPT_DIR/../Resources/${TEMPLATE:t}"
 fi
@@ -44,5 +41,5 @@ if [[ "$(/usr/bin/head -c 4 "$OUTPUT")" != "AEA1" ]]; then
   exit 1
 fi
 print "已生成：$OUTPUT"
-print '用 AirDrop 发到 iPhone，打开并添加；首次运行选择管理端导出的连接 JSON，再选择默认 Mac。'
+print '用 AirDrop 发到 iPhone，打开并添加；首次只导入连接 JSON；之后每次发送选择接收 Mac。'
 /usr/bin/open -R "$OUTPUT"

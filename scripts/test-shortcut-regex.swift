@@ -25,9 +25,10 @@ let key = pattern("{32,256}")
 try test(key, String(repeating: "A", count: 32), true)
 try test(key, String(repeating: "a_-9", count: 64), true)
 for bad in [String(repeating: "a", count: 31), String(repeating: "a", count: 257), String(repeating: "a", count: 32) + "\n", "Bearer " + String(repeating: "a", count: 32)] { try test(key, bad, false) }
-let identity = pattern("ios-")
-try test(identity, "ios-123456789-123456789-123456789-123456789", true)
-try test(identity, "ios-123456789-123456789-123456789-123456789\n", false)
+let receiveFlag = pattern("can_receive")
+try test(receiveFlag, #"{"can_receive":false,"name":"Disabled"}"#, true)
+try test(receiveFlag, "{\"can_receive\" : false }", true)
+for allowed in [#"{"can_receive":true}"#, #"{"name":"Missing flag"}"#, #"{"can_receive":"false"}"#, #"{"name":"\"can_receive\":false"}"#] { try test(receiveFlag, allowed, false) }
 let target = pattern("{8,96}")
 try test(target, "12345678-abcd_123", true)
 try test(target, "bad/id123", false)

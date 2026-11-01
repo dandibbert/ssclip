@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Validate unsigned template structure (not an iOS runtime test)
         run: |
-          plutil -lint Resources/SSClip-Send.unsigned.shortcut Resources/SSClip-Settings.unsigned.shortcut
+          plutil -lint Resources/SSClip-Send.unsigned.shortcut
           python3 Shortcuts/validate_shortcuts.py
           python3 - <<'PY'
           import pathlib, plistlib, hashlib
@@ -27,7 +27,7 @@ jobs:
               'Official Apple signing requires an iCloud-signed-in Mac and is performed by SSClip locally.',
               'GitHub CI cannot prove signed installation or actual iPhone execution.',
           ]
-          for name in ['SSClip-Send', 'SSClip-Settings']:
+          for name in ['SSClip-Send']:
               path = pathlib.Path('Resources') / (name + '.unsigned.shortcut')
               data = path.read_bytes()
               value = plistlib.loads(data)

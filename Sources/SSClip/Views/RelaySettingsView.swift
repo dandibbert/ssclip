@@ -14,7 +14,7 @@ struct RelaySettingsView: View {
     @State private var advancedExpanded = false
 
     private var destinations: [RelayDevice] {
-        relay.devices.filter { $0.id != relay.deviceID }
+        relay.devices.filter { $0.id != relay.deviceID && $0.canReceive }
     }
     private var hasTarget: Bool { destinations.contains { $0.id == relay.targetID } }
     private var visibleInbox: [RelayReceipt] { relay.currentInbox }
@@ -70,7 +70,7 @@ struct RelaySettingsView: View {
         VStack(alignment: .leading, spacing: 9) {
             Label("iPhone 发送剪贴板", systemImage: "iphone")
                 .font(.headline)
-            Text("在已登录 iCloud 的这台 Mac 生成一次快捷指令，AirDrop 到 iPhone 并打开安装。首次运行选择管理端导出的连接 JSON 和目标 Mac，以后直接运行发送。")
+            Text("在已登录 iCloud 的这台 Mac 生成一次快捷指令，AirDrop 到 iPhone 并打开安装。首次运行只导入管理端的连接 JSON；以后复制文本，运行快捷指令并选择这次接收的设备。")
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button(shortcutExporter.isBusy ? "正在生成…" : "生成 iPhone 快捷指令") {
@@ -82,11 +82,7 @@ struct RelaySettingsView: View {
                     Button("取消") { shortcutExporter.cancel() }
                 }
             }
-            Button("生成 iPhone 设置入口（可选）") {
-                shortcutExporter.chooseDestination(template: .settings)
-            }
-            .disabled(shortcutExporter.isBusy)
-            Text("首次只需“SSClip发送”；“SSClip设置”用于以后重选目标 Mac 或重新导入。请保留这两个快捷指令名称。")
+            Text("只需一个“SSClip发送”。每次选择目标，不保存默认设备；设备列表里的“更换连接配置…”可重新导入。已有连接配置自动沿用，旧“SSClip设置”可以删除。请保留主快捷指令名称。")
                 .font(.caption).foregroundStyle(.secondary)
             if !shortcutExporter.status.isEmpty {
                 Text(shortcutExporter.status).font(.caption).foregroundStyle(.secondary)
@@ -132,7 +128,7 @@ struct RelaySettingsView: View {
                     get: { relay.targetID },
                     set: { relay.selectTarget($0) }
                 )) {
-                    Text("选择设备").tag("")
+                    Text("不设默认设备").tag("")
                     ForEach(destinations) { device in
                         Text(displayName(device)).tag(device.id)
                     }
@@ -154,6 +150,14 @@ struct RelaySettingsView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(!hasTarget || relay.isSending || relay.isRegistering)
+            Menu("临时选择设备发送…") {
+                ForEach(destinations) { device in
+                    Button(displayName(device)) { relay.sendCurrentClipboard(to: device.id) }
+                }
+            }
+            .disabled(destinations.isEmpty || relay.isSending || relay.isRegistering)
+            Text("默认设备仅供上方发送按钮和全局快捷键使用；临时选择不会修改默认设备。可选择其他 Mac 或管理端配置的 iPhone/iPad。")
+                .font(.caption).foregroundStyle(.secondary)
 
             VStack(alignment: .leading, spacing: 7) {
                 Toggle("全局快捷键发送", isOn: $settings.sendHotKeyEnabled)
@@ -267,7 +271,7 @@ struct RelaySettingsView: View {
 
     private func displayName(_ device: RelayDevice) -> String {
         let duplicates = destinations.filter { $0.name == device.name }.count > 1
-        return duplicates ? "\(device.name) · \(device.id.prefix(6))" : device.name
+        return duplicates ? "\(device.name) · \(device.id)" : device.name
     }
 
     private func senderName(_ id: String) -> String {

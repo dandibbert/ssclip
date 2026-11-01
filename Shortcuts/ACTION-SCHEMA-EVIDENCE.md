@@ -37,3 +37,15 @@
 用户在 iPhone 选择合法 JSON 被误报“不是连接配置”。检查生成 plist 发现 `dict['key']` 被编译成对象属性读取；现在全部使用 `is.workflow.actions.getvalueforkey`，明确 WFInput/WFDictionaryKey/Value。另发现 `--derive-uuids` 使独立控制流重用 GroupingIdentifier，已禁用并验证完整栈配对。复合减法变量右值会错误赋值，故按简化原则删除两套字节预检，依赖服务端长度限制。正则实际字节检查没有发现双转义错误。新模板需再次官方签名并在 iPhone 试运行；不能把此次生成结构测试声称为实机已修复验证。
 
 用户后续已完成旧版 Mac 官方签名及 iPhone 安装，并运行到配置校验失败，故先前“签名/安装未验证”仅描述开发环境当时状况。修复版仍待重新签名与实机重试，收发链路尚无通过证据。
+
+## 单快捷指令修订
+删除独立设置模板及其生成步骤。每次通过原生 choosefromlist 选择新鲜设备；列表固定配置入口用原生 runworkflow 调用同名主快捷指令，仅传无秘密标记 SSCLIP_REIMPORT_V2，导入后退出。旧状态只读取 version/server_url/api_key，不读取或持久化目标。当前463actions，2696项静态/fixture验证；新交互尚需实机验证。
+
+可解析的无效版本/URL/key/注册失败提供仅异常路径出现的重导入/取消选择；使用同名self调用无秘密marker，导入成功前不写旧状态。原生HTTP或JSON解码异常不能假称已捕获。
+
+## 多 iOS 逻辑发送端（最终覆盖前述 phone-id 设计）
+按产品决定取消物理手机唯一身份：不再读取、生成或写入 phone-id，也不取设备名称。所有iOS快捷指令使用本站逻辑发送源 ios-shortcut-sender / iOS 快捷指令，register明确原生JSON boolean can_receive:false。生成plist字段 WFItemType=4、WFValue.Value=false（真实plist布尔），不是字符串。独立Bark目标负责区分各手机接收。iCloud中仅共享URL/key连接配置。最终426actions，2502项检查；正常每次只选Mac，所有异常恢复和取消保持。
+
+最终接收目标扩展为 Mac 与已启用 Bark 的iOS。显式getvalueforkey读取transport，macos或(ios且bark)才进入列表，并按保留ID排除共享source。根据本站契约唯一can_receive=false正是此保留source，不使用脆弱布尔文本比较。Bark send仍state=pending，故成功仅说明服务端接受。最终447actions，2619检查。
+
+最终补充显式can_receive:false过滤：原生getText(item dictionary)得到JSON，matchText匹配仅JSON布尔false。生成regex对true/false/缺失/字符串false/设备名含伪字段向量验证；生成eligibility块解释器也覆盖disabled Mac/Bark。最终457actions、2707检查。该新gate需iPhone实机验证，不能用合成JSON检查替代原生运行。

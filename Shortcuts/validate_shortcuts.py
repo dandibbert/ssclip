@@ -16,13 +16,12 @@ def walk(x):
  elif isinstance(x,list):
   for v in x:yield from walk(v)
 
-def resource(chinese, ascii_name):
- for path in [ROOT/chinese, ROOT/ascii_name, ROOT.parent/'Resources'/ascii_name]:
+def resource():
+ for path in [ROOT/'SSClip发送_unsigned.shortcut', ROOT/'SSClip-Send.unsigned.shortcut', ROOT.parent/'Resources'/'SSClip-Send.unsigned.shortcut']:
   if path.exists(): return path
- raise FileNotFoundError(ascii_name)
-main=plistlib.loads(resource('SSClip发送_unsigned.shortcut','SSClip-Send.unsigned.shortcut').read_bytes())
-helper=plistlib.loads(resource('SSClip设置_unsigned.shortcut','SSClip-Settings.unsigned.shortcut').read_bytes())
-for name,p in [('main',main),('helper',helper)]:
+ raise FileNotFoundError('SSClip-Send.unsigned.shortcut')
+main=plistlib.loads(resource().read_bytes())
+for name,p in [('main',main)]:
  acts=p['WFWorkflowActions']; ids=set()
  for a in acts:
   check(a['WFWorkflowActionIdentifier'].startswith('is.workflow.actions.'),f'{name}: nonnative action')
@@ -57,11 +56,11 @@ check(set(fields)=={'id','source','target','text','ttl_seconds'},'Complete proto
 text=fields['text']['Value']
 check(text['string']=='\ufffc' and next(iter(text['attachmentsByRange'].values()))['VariableName']=='text','Text JSON value uses native magic variable')
 reads=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.documentpicker.open']
-check(len(reads)==2,'State and identity only')
+check(len(reads)==1,'Shared connection state only; no physical phone identity')
 for q in reads:
  check(q['WFFileStorageService']=='iCloud Drive' and q['WFShowFilePicker'] is False and q['WFFileErrorIfNotFound'] is False,'Private persistent file lookup is noninteractive and missing-safe')
 writes=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.documentpicker.save']
-check({q['WFFileDestinationPath'] for q in writes}=={'SSClip/phone-id.txt','SSClip/connection-state.json'},'No clipboard body persistence')
+check({q['WFFileDestinationPath'] for q in writes}=={'SSClip/connection-state.json'},'No clipboard body persistence')
 for q in writes:check(q['WFAskWhereToSave'] is False and q['WFFileStorageService']=='iCloud Drive','No public config sharing')
 alerts=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.alert']
 for q in alerts:
@@ -72,10 +71,11 @@ check(sum(a['WFWorkflowActionIdentifier']=='is.workflow.actions.getclipboard' fo
 check(any(a['WFWorkflowActionIdentifier']=='is.workflow.actions.getitemtype' for a in acts),'Explicit type gate before text conversion')
 source=(ROOT/'SSClip-send.cherri').read_text()
 check(source.index('if @setupInput.text')<source.index('@state = getDictionary'),'Corrupt state recoverable via reimport setup before decode')
-check(source.index('if @needsTarget == 1')<source.index('@clipboard = getClipboard()'),'Setup completes before clipboard access')
-check('if @targetFound != 1' in source,'Missing target fails closed, no fallback')
+check(source.index('@newState =')<source.index('@clipboard = getClipboard()'),'Setup completes before clipboard access')
+check('if !@targetID {' in source,'Missing target fails closed, no fallback')
 check('if @returnedID.text == @messageID' in source and 'if @sendState.text == "pending"' in source,'Success requires matching message ID and state')
-check(r'\Aios-[0-9]{9}-[0-9]{9}-[0-9]{9}-[0-9]{9}\z' in source,'Persistent high-entropy device identity validated')
+check('@senderID = "ios-shortcut-sender"' in source and '@senderName = "iOS 快捷指令"' in source,'Explicit shared logical sender identity')
+check('phone-id.txt' not in source and 'getDeviceDetail' not in source,'No physical-device identity claims or persistence')
 # Port and anchored origin validation is mirrored from the native regex + numeric guard.
 from urllib.parse import urlsplit
 origin_pattern=re.search(r"@originMatch = matchText\('([^']+)'",source).group(1).replace(r"\z",r"\Z")
@@ -90,12 +90,9 @@ for value in ['http://example.com','https://user:pass@example.com','https://user
  except ValueError:valid=False
  check(not valid,'Expected malformed or unsupported origin rejection')
 check('if @needsConfig == 1 {\n confirm("将连接：{@server}' in source,'Actual target origin explicitly confirmed before first use')
-h=[a for a in helper['WFWorkflowActions'] if a['WFWorkflowActionIdentifier']=='is.workflow.actions.runworkflow']
-check(len(h)==1 and h[0]['WFWorkflowActionParameters']['WFWorkflowName']=='SSClip发送','Helper invokes exact main name')
-check(not any(a['WFWorkflowActionIdentifier']=='is.workflow.actions.getclipboard' for a in helper['WFWorkflowActions']),'Helper does not read clipboard')
 # Regression for the first real-iPhone failure: dictionary brackets compiled as
 # object-property aggrandizements; derived UUIDs also aliased independent If groups.
-for name,p in [('main',main),('helper',helper)]:
+for name,p in [('main',main)]:
  stack=[]; opened=set()
  for a in p['WFWorkflowActions']:
   q=a.get('WFWorkflowActionParameters',{})
@@ -164,5 +161,127 @@ check(not any(a['WFWorkflowActionIdentifier'] in ['is.workflow.actions.math','is
 check(any(a['WFWorkflowActionIdentifier']=='is.workflow.actions.appendvariable' and a['WFWorkflowActionParameters'].get('WFVariableName')=='choices' for a in acts),'Device selection accumulates instead of overwriting list')
 for pattern in patterns:
  check('\\\\' not in pattern,'No doubled regex escape')
-print(f'PASS: {checks} structural/privacy/generated-dictionary checks; {len(acts)} main actions, {len(helper["WFWorkflowActions"])} helper actions. iOS runtime and Apple signing NOT verified by these checks.')
-for path in ROOT.glob('*_unsigned.shortcut'):print(hashlib.sha256(path.read_bytes()).hexdigest(),path.name)
+# Single-shortcut daily destination selection and old state compatibility.
+old_state={'version':1,'server_url':'https://example.com','api_key':'a'*64,'target_id':'OLD-DO-NOT-USE','target_name':'Old Mac'}
+loaded=run_dictionary_pipeline('state',old_state,'apiKey')
+check(loaded['server']==old_state['server_url'] and loaded['apiKey']==old_state['api_key'],'Old state retains connection')
+lookups=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.getvalueforkey']
+check(not any(q['WFDictionaryKey'] in ['target_id','target_name'] for q in lookups if isinstance(q['WFDictionaryKey'],str)),'Never load stale target')
+check('"target_id"' not in source and '"target_name"' not in source,'No default target persisted')
+selects=[i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.choosefromlist' and a['WFWorkflowActionParameters'].get('WFChooseFromListActionPrompt')=='选择本次接收设备；取消不会发送']
+check(len(selects)==1,'Exactly one destination selector')
+clip_index=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.getclipboard')
+check(selects[0]<clip_index,'Selection precedes clipboard access')
+check('if !@choice { stop() }' in source,'Explicit cancellation early exit')
+check(source.index('saveSSClipState(@newStateText)')<source.index('stop()',source.index('saveSSClipState(@newStateText)'))<source.index('@devicesRaw ='),'Import stops before selection/clipboard/send')
+check('@targetID = ""' in source,'Target initialized empty every run')
+check('@label = "{@name} · {@id}"' in source and '@changeConnection = "更换连接配置…"' in source,'Config entry cannot equal full-ID device label')
+runs=[a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.runworkflow']
+check(len(runs)==8 and all(q['WFWorkflowName']=='SSClip发送' for q in runs),'Recovery and list entry only self reimport, no helper dependency')
+check('SSClip设置' not in source and 'SSCLIP_SETUP_V1' not in source,'No separate settings shortcut')
+# Native selection is unconditional for configured daily runs, not a saved-target branch.
+stack=[];contexts={}
+for index,a in enumerate(acts):
+ q=a.get('WFWorkflowActionParameters',{})
+ if q.get('WFControlFlowMode')==0:stack.append(q['GroupingIdentifier'])
+ contexts[index]=list(stack)
+ if q.get('WFControlFlowMode')==2:stack.pop()
+check(not contexts[selects[0]],'Daily selector is top-level, never skipped via cached target')
+state_save=next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.documentpicker.save' and a['WFWorkflowActionParameters'].get('WFFileDestinationPath')=='SSClip/connection-state.json')
+check(bool(contexts[state_save]),'State save only within import branch')
+check(any(a['WFWorkflowActionIdentifier']=='is.workflow.actions.exit' for a in acts[state_save:selects[0]]),'Import branch exits before daily chooser/send')
+choice_guard=acts[selects[0]+2]
+check(choice_guard['WFWorkflowActionIdentifier']=='is.workflow.actions.conditional','Native empty-choice guard follows selected variable assignment')
+check(acts[selects[0]+3]['WFWorkflowActionIdentifier']=='is.workflow.actions.exit','Native empty-choice branch immediately exits')
+check(next(i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.downloadurl' and a['WFWorkflowActionParameters']['WFURL']['Value']['string'].endswith('/devices'))<selects[0],'Native devices fetch precedes every chooser')
+# Bounded execution of emitted label -> native dictionary setter -> selected key getter.
+def render_native(value,env):
+ if isinstance(value,str):return value
+ value=value.get('Value',value)
+ if value.get('Type')=='Variable':return env[value['VariableName']]
+ if 'string' in value:
+  text=value['string']
+  for span,token in sorted(value.get('attachmentsByRange',{}).items(),key=lambda pair:int(pair[0].split(',')[0][1:]),reverse=True):
+   start,length=map(int,span.strip('{}').split(','))
+   text=text[:start]+str(env[token['VariableName']])+text[start+length:]
+  return text
+ raise AssertionError('Unsupported fixture token')
+setter=next(a['WFWorkflowActionParameters'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.setvalueforkey')
+selected_getter=next(q for q in lookups if isinstance(q['WFDictionaryKey'],dict))
+check(selected_getter['WFInput']['Value']['VariableName']=='choiceMap','Selected ID comes from fresh choice map')
+check(list(selected_getter['WFDictionaryKey']['Value']['attachmentsByRange'].values())==[{'Type':'Variable','VariableName':'choice'}],'Lookup key is current user selection')
+label_action=next(acts[i-1]['WFWorkflowActionParameters'] for i,a in enumerate(acts) if a.get('WFWorkflowActionParameters',{}).get('WFVariableName')=='label')
+def map_snapshot(devices):
+ env={'choiceMap':{}}
+ for device in devices:
+  env.update(name=device['name'],id=device['id'])
+  env['label']=render_native(label_action['WFTextActionText'],env)
+  key=render_native(setter['WFDictionaryKey'],env);value=render_native(setter['WFDictionaryValue'],env)
+  env['choiceMap'][key]=value
+ return env['choiceMap']
+snapshot1=map_snapshot([{'name':'Same Mac','id':'mac-old-111'},{'name':'Same Mac','id':'mac-live-222'}])
+snapshot2=map_snapshot([{'name':'Same Mac','id':'mac-live-222'},{'name':'Same Mac','id':'mac-new-333'}])
+check(len(snapshot1)==2 and len(snapshot2)==2,'Same-name devices remain unambiguous')
+def resolve_selected(choice,mapping):
+ if not choice or choice=='更换连接配置…':return None
+ env={'choice':choice}
+ return mapping.get(render_native(selected_getter['WFDictionaryKey'],env))
+for label,device_id in snapshot2.items():check(resolve_selected(label,snapshot2)==device_id,'Current selection resolves current ID')
+check(resolve_selected('Same Mac · mac-old-111',snapshot2) is None,'Removed old target cannot resolve')
+for choice in ['',None,'更换连接配置…']:
+ check(resolve_selected(choice,snapshot2) is None,'Cancellation/config entry yields no send target')
+check(acts[selects[0]+2]['WFWorkflowActionParameters']['WFCondition']==101,'Actual selection guard is has-no-value')
+recovery_selects=[i for i,a in enumerate(acts) if a['WFWorkflowActionIdentifier']=='is.workflow.actions.choosefromlist' and a['WFWorkflowActionParameters']['WFInput']['Value'].get('VariableName')=='recoveryOptions']
+check(len(recovery_selects)==7,'All recoverable connection errors offer in-shortcut reimport')
+for i in recovery_selects:
+ guard=acts[i+2]['WFWorkflowActionParameters']
+ check(guard['WFCondition']==4 and guard['WFConditionalActionString']=='重新导入连接配置','Only explicit reimport selection invokes self')
+ call=acts[i+5]['WFWorkflowActionParameters']
+ check(call['WFWorkflowName']=='SSClip发送' and call['WFInput']['Value']['VariableName']=='reimportMarker','Recovery passes harmless marker only')
+ check(acts[i+9]['WFWorkflowActionIdentifier']=='is.workflow.actions.exit','Cancel/empty selection exits recovery branch without save/send')
+check('删除 Shortcuts/SSClip/connection-state.json' not in source,'Do not require deleting state to recover bad credentials')
+register_fields={q['WFKey']['Value']['string']:q for q in http[0]['WFJSONValues']['Value']['WFDictionaryFieldValueItems']}
+capability=register_fields['can_receive']
+check(capability['WFItemType']==4,'can_receive is native boolean dictionary type, not string or number')
+check(capability['WFValue']['Value'] is False and capability['WFValue']['WFSerializationType']=='WFNumberSubstitutableState','can_receive serializes false, never string false')
+check(register_fields['platform']['WFValue']['Value']['string']=='ios','Shared sender platform remains ios')
+check(next(iter(register_fields['id']['WFValue']['Value']['attachmentsByRange'].values()))['VariableName']=='senderID','Register uses logical sender ID')
+check(next(iter(fields['source']['Value']['attachmentsByRange'].values()))['VariableName']=='senderID','Send source matches logical sender')
+check(any(q['WFDictionaryKey']=='transport' for q in lookups if isinstance(q['WFDictionaryKey'],str)),'Read transport via native dictionary action')
+check('if @platform.text == "ios" {\n  if @transport.text == "bark"' in source,'Only Bark transport qualifies ios receiver')
+check('if @id.text != @senderID' in source,'Reserved send-only sender always excluded')
+# Protocol fixtures include explicit disabled receivers, missing capability is compatible.
+receiver_fixtures=[({'id':'mac-recv-111','platform':'macos','transport':'relay','can_receive':True},True),({'id':'bark-ios-222','platform':'ios','transport':'bark','can_receive':True},True),({'id':'old-ios-333','platform':'ios','transport':'relay','can_receive':True},False),({'id':'ios-shortcut-sender','platform':'ios','transport':'relay','can_receive':False},False),({'id':'disabled-bark','platform':'ios','transport':'bark','can_receive':False},False),({'id':'disabled-mac','platform':'macos','transport':'relay','can_receive':False},False)]
+for row,expected in receiver_fixtures:
+ eligible=(row['platform']=='macos' or (row['platform']=='ios' and row['transport']=='bark')) and row['id']!='ios-shortcut-sender' and row.get('can_receive') is not False
+ check(eligible==expected,'Current protocol receiver eligibility fixture')
+# Execute the emitted minimal eligibility block rather than only mirror source.
+eligible_start=next(i-1 for i,a in enumerate(acts) if a.get('WFWorkflowActionParameters',{}).get('WFVariableName')=='eligible')
+def native_receiver_type(row):
+ env={'platform':row['platform'],'transport':row.get('transport',''),'item':row};outputs={};enabled=[True]
+ for a in acts[eligible_start:]:
+  kind=a['WFWorkflowActionIdentifier'];q=a.get('WFWorkflowActionParameters',{})
+  if kind=='is.workflow.actions.conditional':
+   mode=q['WFControlFlowMode']
+   if mode==0:
+    variable=q['WFInput']['Variable']['Value']['VariableName']
+    if variable=='eligible':return env['eligible']==1
+    if q['WFCondition']==100:
+     enabled.append(enabled[-1] and bool(env[variable]))
+    else:
+     check(q['WFCondition']==4,'Eligibility uses native exact string equality')
+     enabled.append(enabled[-1] and env[variable]==q['WFConditionalActionString'])
+   elif mode==2:enabled.pop()
+   else:raise AssertionError('Unexpected eligibility branch shape')
+  elif enabled[-1] and kind=='is.workflow.actions.detect.text':outputs[q['UUID']]=json.dumps(read_token(q['WFInput'],env,outputs),ensure_ascii=False)
+  elif enabled[-1] and kind=='is.workflow.actions.text.match':outputs[q['UUID']]=re.findall(q['WFMatchTextPattern'],render_native(q['text'],env))
+  elif enabled[-1] and kind=='is.workflow.actions.number':outputs[q['UUID']]=q['WFNumberActionNumber']
+  elif enabled[-1] and kind=='is.workflow.actions.setvariable':env[q['WFVariableName']]=read_token(q['WFInput'],env,outputs)
+ raise AssertionError('Missing eligibility gate')
+for row,expected in receiver_fixtures:
+ check((native_receiver_type(row) and row['id']!='ios-shortcut-sender')==expected,'Actual plist receiver predicate matches protocol fixture')
+cap_pattern=next(a['WFWorkflowActionParameters']['WFMatchTextPattern'] for a in acts if a['WFWorkflowActionIdentifier']=='is.workflow.actions.text.match' and 'can_receive' in a['WFWorkflowActionParameters']['WFMatchTextPattern'])
+for row,expected in [({'can_receive':False},True),({'can_receive':True},False),({},False),({'can_receive':'false'},False),({'name':'"can_receive":false'},False)]:
+ check(bool(re.search(cap_pattern,json.dumps(row,ensure_ascii=False)))==expected,'Actual capability regex detects only JSON Boolean false')
+print(f'PASS: {checks} structural/privacy/generated-dictionary checks; {len(acts)} main actions. iOS runtime and Apple signing NOT verified by these checks.')
+for path in [resource()]:print(hashlib.sha256(path.read_bytes()).hexdigest(),path.name)

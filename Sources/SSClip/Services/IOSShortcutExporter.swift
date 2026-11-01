@@ -103,43 +103,37 @@ private final class OfficialShortcutSigner: @unchecked Sendable {
 
 @MainActor
 final class IOSShortcutExporter: ObservableObject {
-    enum Template: Equatable {
-        case send, settings
-        var filename: String { self == .send ? "SSClip发送.shortcut" : "SSClip设置.shortcut" }
-    }
+    private let filename = "SSClip发送.shortcut"
     typealias Signer = @MainActor (URL, URL) async throws -> ShortcutSigningResult
     @Published private(set) var isBusy = false
     @Published private(set) var status = ""
     private let templateURL: () -> URL?
-    private let settingsTemplateURL: () -> URL?
     private let signer: Signer
     private var operation: Task<Void, Never>?
 
     init(templateURL: @escaping () -> URL? = { Bundle.main.url(forResource: "SSClip-Send", withExtension: "unsigned.shortcut") },
-         settingsTemplateURL: @escaping () -> URL? = { Bundle.main.url(forResource: "SSClip-Settings", withExtension: "unsigned.shortcut") },
          signer: Signer? = nil) {
         self.templateURL = templateURL
-        self.settingsTemplateURL = settingsTemplateURL
         self.signer = signer ?? { try await OfficialShortcutSigner.sign(input: $0, output: $1) }
     }
 
-    func chooseDestination(template: Template = .send) {
+    func chooseDestination() {
         guard !isBusy else { return }
         let panel = NSSavePanel()
-        panel.title = template == .send ? "生成 iPhone 快捷指令" : "生成 iPhone 设置入口"
+        panel.title = "生成 iPhone 快捷指令"
         panel.message = "由这台 Mac 的系统快捷指令工具签名。请先登录 iCloud；生成的文件不包含你的 API Key。"
-        panel.nameFieldStringValue = template.filename
+        panel.nameFieldStringValue = filename
         panel.allowedContentTypes = [UTType(filenameExtension: "shortcut") ?? .data]
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let destination = panel.url else { return }
-        beginExport(to: destination, template: template)
+        beginExport(to: destination)
     }
 
-    func beginExport(to destination: URL, template: Template = .send) {
+    func beginExport(to destination: URL) {
         guard !isBusy else { return }
         // Set busy before scheduling so repeated clicks cannot create two signers.
         isBusy = true
-        operation = Task { [weak self] in await self?.performExport(to: destination, template: template) }
+        operation = Task { [weak self] in await self?.performExport(to: destination) }
     }
 
     func cancel() {
@@ -154,13 +148,13 @@ final class IOSShortcutExporter: ObservableObject {
         return dictionary["WFWorkflowActions"] != nil
     }
 
-    private func performExport(to destination: URL, template: Template) async {
+    private func performExport(to destination: URL) async {
         defer { isBusy = false; operation = nil }
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("SSClip-sign-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         do {
             try Task.checkCancellation()
-            let resource = template == .send ? templateURL() : settingsTemplateURL()
+            let resource = templateURL()
             guard let input = resource, FileManager.default.fileExists(atPath: input.path) else {
                 status = "应用内快捷指令模板缺失，请重新安装完整 SSClip 测试包。"; return
             }
@@ -176,9 +170,9 @@ final class IOSShortcutExporter: ObservableObject {
             let outputFolder = root.appendingPathComponent("Output", isDirectory: true)
             try FileManager.default.createDirectory(at: inputFolder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try FileManager.default.createDirectory(at: outputFolder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            let namedInput = inputFolder.appendingPathComponent(template.filename)
+            let namedInput = inputFolder.appendingPathComponent(filename)
             try original.write(to: namedInput, options: .atomic)
-            let staged = outputFolder.appendingPathComponent(template.filename)
+            let staged = outputFolder.appendingPathComponent(filename)
             status = "正在用 Apple 官方工具签名，最长约 150 秒…"
             let result = try await signer(namedInput, staged)
             try Task.checkCancellation()
@@ -200,9 +194,7 @@ final class IOSShortcutExporter: ObservableObject {
             try Task.checkCancellation()
             // Atomic write keeps an existing destination intact on signing or write failure.
             try signed.write(to: destination, options: .atomic)
-            status = template == .send
-                ? "已生成签名快捷指令。请 AirDrop 到 iPhone 并打开安装；首次运行选择连接 JSON 和目标 Mac。请保留名称“SSClip发送”。"
-                : "已生成签名设置入口。请 AirDrop 到 iPhone 并安装“SSClip设置”，用于重选目标或重新导入；需同时安装并保留名称“SSClip发送”。"
+            status = "已生成签名快捷指令。请 AirDrop 到 iPhone 并替换或安装“SSClip发送”；首次只导入连接 JSON，以后每次发送选择接收设备。旧版连接配置会继续使用。"
         } catch is CancellationError {
             status = "已取消生成，原文件未改变。"
         } catch ShortcutSigningFailure.timedOut {

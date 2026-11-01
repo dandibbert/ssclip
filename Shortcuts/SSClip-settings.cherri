@@ -1,9 +1,0 @@
-#define name SSClip设置
-#define version 17
-#define inputs text
-#define color teal
-#define glyph gear
-#include 'actions/shortcuts'
-comment('可选设置入口：调用已安装的“SSClip发送”，仅传入无秘密的设置标记；不读取剪贴板、不含 API Key。')
-@setupMarker = "SSCLIP_SETUP_V1"
-run("SSClip发送", @setupMarker)

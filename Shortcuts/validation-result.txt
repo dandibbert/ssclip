@@ -1,4 +1,3 @@
-PASS: 2345 structural/privacy/generated-dictionary checks; 392 main actions, 4 helper actions. iOS runtime and Apple signing NOT verified by these checks.
-61e76ab5a4616a2c0487e9af79c8b34a6e9869409ebc4aa1dcd1d1b0e58fbdc8 SSClip设置_unsigned.shortcut
-5c45744da83f79a5413af3794b19fb8d458895c3ba465a02c8d1d64aa061ae29 SSClip发送_unsigned.shortcut
+PASS: 2707 structural/privacy/generated-dictionary checks; 457 main actions. iOS runtime and Apple signing NOT verified by these checks.
+e0423512051766a5ba84486d90cca7447699447687d915c31c5036dff3d20353 SSClip发送_unsigned.shortcut
 Unsigned resources generated. Apple signing and iOS runtime remain separate required checks.

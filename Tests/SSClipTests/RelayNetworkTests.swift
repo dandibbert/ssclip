@@ -12,6 +12,8 @@ private final class RelayHTTPScenario: @unchecked Sendable {
     private var counts: [String: Int] = [:]
     private var stopCount = 0
     private var requests: [URLRequest] = []
+    private var targets: [String] = []
+    var sentTargets: [String] { lock.lock(); defer { lock.unlock() }; return targets }
     var recordedRequests: [URLRequest] { lock.lock(); defer { lock.unlock() }; return requests }
     private var held: RelayStubProtocol?
     let mode: String
@@ -41,6 +43,20 @@ private final class RelayHTTPScenario: @unchecked Sendable {
     func reply(_ request: URLRequest) -> (Int, Data)? {
         let path = request.url!.lastPathComponent
         lock.lock(); requests.append(request); counts[path, default: 0] += 1; let number = counts[path]!; lock.unlock()
+        if path == "send", mode == "multiDevices" {
+            var data = request.httpBody ?? Data()
+            if data.isEmpty, let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }; data.append(contentsOf: buffer.prefix(count))
+                }
+            }
+            if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let target = object["target"] as? String {
+                lock.lock(); targets.append(target); lock.unlock()
+            }
+        }
         if mode == "unauthorized" { return (401, Data("{}".utf8)) }
         if path == "register" {
             if mode == "registerRetry" && number == 1 { return (500, Data("{}".utf8)) }
@@ -48,8 +64,16 @@ private final class RelayHTTPScenario: @unchecked Sendable {
         }
         if path == "devices" {
             let device: [String: Any] = ["id": testDeviceID, "name": "Test Mac", "platform": "macos", "last_seen_at": 1]
-            let peer: [String: Any] = ["id": testPeerID, "name": "Other device", "platform": "ios", "last_seen_at": 1]
-            let replacement: [String: Any] = ["id": "33333333-3333-4333-8333-333333333333", "name": "Different device", "platform": "ios", "last_seen_at": 1]
+            let peer: [String: Any] = ["id": testPeerID, "name": "Other device", "platform": "macos", "last_seen_at": 1]
+            let replacement: [String: Any] = ["id": "33333333-3333-4333-8333-333333333333", "name": "Different device", "platform": "macos", "last_seen_at": 1]
+            if mode == "multiDevices" {
+                let mac: [String: Any] = ["id": "another-mac-123", "name": "Same name", "platform": "macos", "last_seen_at": 1]
+                let phone: [String: Any] = ["id": "ssclip-bark-phone-1", "name": "Same name", "platform": "ios", "transport": "bark", "last_seen_at": 1]
+                let tablet: [String: Any] = ["id": "ssclip-bark-tablet-2", "name": "Same name", "platform": "ios", "transport": "bark", "last_seen_at": 1]
+                let sender: [String: Any] = ["id": "ios-shortcut-sender", "name": "iOS 快捷指令", "platform": "ios", "can_receive": false, "last_seen_at": 1]
+                let legacy: [String: Any] = ["id": "old-ios-queue-sender", "name": "Old phone sender", "platform": "ios", "last_seen_at": 1]
+                return (200, try! JSONSerialization.data(withJSONObject: ["devices": [device, peer, mac, phone, tablet, sender, legacy], "server_time": 1]))
+            }
             return (200, try! JSONSerialization.data(withJSONObject: ["devices": [device, mode == "peerGone" ? replacement : peer], "server_time": 1]))
         }
         if path == "send", mode == "holdSend" { return nil }
@@ -193,6 +217,72 @@ struct RelayNetworkTests {
         #expect(context.pasteboard.string(forType: .string) == "new local text")
         #expect(context.pasteboard.changeCount == localChangeCount)
         #expect(context.store.items.isEmpty)
+    }
+
+    @Test(arguments: ["another-mac-123", "ssclip-bark-phone-1", "ssclip-bark-tablet-2"])
+    func temporarySendRoutesByIDAcrossMacAndMultipleIOSWithoutChangingDefault(target: String) async throws {
+        let context = try makeContext(mode: "multiDevices")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 7 }
+        #expect(context.controller.targetID == testPeerID)
+        context.pasteboard.clearContents(); context.pasteboard.setString("route only this ID", forType: .string)
+        context.controller.sendCurrentClipboard(to: target)
+        try await eventually { context.scenario.count("send") == 1 && !context.controller.isSending }
+        #expect(context.scenario.sentTargets == [target])
+        #expect(context.controller.targetID == testPeerID)
+        #expect(context.defaults.string(forKey: "relay.v2.target") == testPeerID)
+        #expect(!context.controller.enabled)
+    }
+
+    @Test func optionalDefaultCanBeClearedAndInvalidTemporaryTargetDoesNotFallback() async throws {
+        let context = try makeContext(mode: "multiDevices")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 7 }
+        context.controller.selectTarget("ios-shortcut-sender")
+        context.controller.selectTarget("old-ios-queue-sender")
+        #expect(context.controller.targetID == testPeerID)
+        context.controller.selectTarget("")
+        #expect(context.controller.targetID.isEmpty)
+        #expect(context.defaults.string(forKey: "relay.v2.target") == nil)
+        context.pasteboard.clearContents(); context.pasteboard.setString("never fallback", forType: .string)
+        context.controller.sendCurrentClipboard()
+        context.controller.sendCurrentClipboard(to: "missing-device-123")
+        context.controller.sendCurrentClipboard(to: "ios-shortcut-sender")
+        context.controller.sendCurrentClipboard(to: "old-ios-queue-sender")
+        #expect(context.scenario.count("send") == 0)
+        #expect(context.controller.targetID.isEmpty)
+        context.controller.sendCurrentClipboard(to: "another-mac-123")
+        try await eventually { context.scenario.count("send") == 1 && !context.controller.isSending }
+        #expect(context.scenario.sentTargets == ["another-mac-123"])
+        #expect(context.controller.targetID.isEmpty)
+    }
+
+    @Test func legacyIOSSenderDefaultBecomesUnavailableWithoutChangingToAnotherPhone() async throws {
+        let context = try makeContext(mode: "multiDevices", initialTargetID: "old-ios-queue-sender")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 7 }
+        #expect(context.controller.targetID.isEmpty)
+        #expect(context.controller.status.contains("原默认设备已不可用"))
+        #expect(context.controller.devices.filter(\.canReceive).contains { $0.id == "ssclip-bark-phone-1" })
+        #expect(!context.controller.devices.filter(\.canReceive).contains { $0.id == "old-ios-queue-sender" || $0.id == "ios-shortcut-sender" })
+    }
+
+    @Test func receiveCapabilityDecodingKeepsLegacyMacButRejectsSendOnlyAndNonBarkIOS() throws {
+        func device(platform: String, transport: String? = nil, canReceive: Bool? = nil) throws -> RelayDevice {
+            var value: [String: Any] = ["id": "fixture-device-123", "name": "Fixture", "platform": platform, "last_seen_at": 1]
+            if let transport { value["transport"] = transport }
+            if let canReceive { value["can_receive"] = canReceive }
+            return try JSONDecoder().decode(RelayDevice.self, from: JSONSerialization.data(withJSONObject: value))
+        }
+        #expect(try device(platform: "macos").canReceive)
+        #expect(try device(platform: "web").canReceive)
+        #expect(try device(platform: "ios", transport: "bark").canReceive)
+        #expect(try !device(platform: "ios").canReceive)
+        #expect(try !device(platform: "ios", transport: "bark", canReceive: false).canReceive)
+        #expect(try !device(platform: "macos", canReceive: false).canReceive)
     }
 
     @Test func validImportRegistersAndDiscoversWithoutEnablingOrWritingClipboard() async throws {
@@ -457,7 +547,7 @@ struct RelayNetworkTests {
         #expect(condition(), "Expected controller state within two seconds")
     }
 
-    private func makeContext(mode: String, corruptJournal: Bool = false, configured: Bool = true, writerSucceeds: Bool = true) throws -> RelayNetworkContext {
+    private func makeContext(mode: String, corruptJournal: Bool = false, configured: Bool = true, writerSucceeds: Bool = true, initialTargetID: String = testPeerID) throws -> RelayNetworkContext {
         let suite = "SSClipRelayNetworkTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         if configured {
@@ -465,7 +555,7 @@ struct RelayNetworkTests {
             defaults.set(1, forKey: "relay.connectionVersion")
         }
         defaults.set(testDeviceID, forKey: "relay.deviceUUID")
-        defaults.set(testPeerID, forKey: "relay.v2.target")
+        defaults.set(initialTargetID, forKey: "relay.v2.target")
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         if corruptJournal { try Data("corrupt-journal".utf8).write(to: directory.appendingPathComponent("relay-inbox.json")) }
