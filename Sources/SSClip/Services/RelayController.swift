@@ -50,8 +50,9 @@ final class RelayController: ObservableObject {
         self.defaults = defaults
         serviceURL = defaults.string(forKey: "relay.v2.url") ?? ""
         let savedID = defaults.string(forKey: "relay.deviceUUID") ?? ""
-        deviceID = UUID(uuidString: savedID) != nil ? savedID : UUID().uuidString.lowercased()
-        defaults.set(deviceID, forKey: "relay.deviceUUID")
+        let initialID = UUID(uuidString: savedID) != nil ? savedID : UUID().uuidString.lowercased()
+        deviceID = initialID
+        defaults.set(initialID, forKey: "relay.deviceUUID")
         var initialName = defaults.string(forKey: "relay.deviceName") ?? Host.current().localizedName ?? "我的 Mac"
         initialName = String(String.UnicodeScalarView(initialName.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })).trimmingCharacters(in: .whitespacesAndNewlines)
         while initialName.utf16.count > 80 { initialName.removeLast() }
