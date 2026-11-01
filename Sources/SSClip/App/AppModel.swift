@@ -46,7 +46,7 @@ final class AppModel: ObservableObject {
 
     static var isRecordingShortcut: Bool {
         guard let app = NSApp else { return false }
-        return app.windows.contains { ($0.firstResponder as? HotKeyRecorderButton)?.isRecording == true }
+        return app.windows.contains { $0.isVisible && ($0.firstResponder as? HotKeyRecorderButton)?.isRecording == true }
     }
 
     @discardableResult

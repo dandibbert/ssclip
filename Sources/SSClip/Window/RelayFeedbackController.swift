@@ -17,6 +17,7 @@ final class RelayFeedbackController {
         panel = window
         window.isOpaque = false; window.backgroundColor = .clear
         window.hasShadow = true; window.ignoresMouseEvents = true
+        window.hidesOnDeactivate = false
         window.level = .floating
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         window.contentView = NSHostingView(rootView:
