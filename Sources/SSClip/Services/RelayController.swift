@@ -12,19 +12,25 @@ final class RelayController: ObservableObject {
     @Published private(set) var status = "同步未启用"
     @Published private(set) var isSending = false
     @Published private(set) var inbox: [RelayReceipt] = []
-    var hasCredential: Bool { RelayCredential.read(serviceURL) != nil }
+    var hasCredential: Bool { credentialReader(serviceURL) != nil }
     private weak var model: AppModel?
     private let defaults: UserDefaults
     private let journalURL: URL
     private let session: URLSession
+    private let credentialReader: (String) -> String?
+    private let sleepNanoseconds: UInt64
     private var receiveTask: Task<Void, Never>?
     private var sendTask: Task<Void, Never>?
     private var generation = UUID()
     private var journalHealthy = true
     private var scope: String { serviceURL + "|" + deviceID }
 
-    init(model: AppModel, defaults: UserDefaults = .standard, directory: URL? = nil) {
+    init(model: AppModel, defaults: UserDefaults = .standard, directory: URL? = nil,
+         session: URLSession? = nil, credentialReader: @escaping (String) -> String? = RelayCredential.read,
+         sleepNanoseconds: UInt64 = 3_000_000_000) {
         self.model = model
+        self.credentialReader = credentialReader
+        self.sleepNanoseconds = sleepNanoseconds
         self.defaults = defaults
         serviceURL = defaults.string(forKey: "relay.url") ?? "https://ssclip-relay-lab.sgah81.chatgpt.site"
         deviceID = defaults.string(forKey: "relay.device") ?? "mac-mini-test"
@@ -36,7 +42,7 @@ final class RelayController: ObservableObject {
         configuration.timeoutIntervalForResource = 15
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
-        session = URLSession(configuration: configuration, delegate: RelayNoRedirect(), delegateQueue: nil)
+        self.session = session ?? URLSession(configuration: configuration, delegate: RelayNoRedirect(), delegateQueue: nil)
         do {
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             if FileManager.default.fileExists(atPath: journalURL.path) {
@@ -46,7 +52,7 @@ final class RelayController: ObservableObject {
             journalHealthy = false
             status = "同步收件箱无法读取；为防止重复覆盖，已停止同步"
         }
-        if let saved = RelayCredential.read(serviceURL) {
+        if let saved = credentialReader(serviceURL) {
             RelayCredential.remember(saved)
             model.removeRelayCredentialsFromHistory()
         }
@@ -98,7 +104,7 @@ final class RelayController: ObservableObject {
 
     private enum Failure: Error { case http(Int), invalid, storage }
     private func request(_ endpoint: String, body: [String: Any]? = nil) async throws -> Data {
-        guard let base = RelayPolicy.baseURL(serviceURL), let credential = RelayCredential.read(serviceURL) else { throw Failure.invalid }
+        guard let base = RelayPolicy.baseURL(serviceURL), let credential = credentialReader(serviceURL) else { throw Failure.invalid }
         var components = URLComponents(url: base.appendingPathComponent("api/service/" + endpoint), resolvingAgainstBaseURL: false)!
         if body == nil { components.queryItems = [URLQueryItem(name: "target", value: deviceID)] }
         var req = URLRequest(url: components.url!)
@@ -126,9 +132,15 @@ final class RelayController: ObservableObject {
     private func pollLoop(_ current: UUID) async {
         var lastSuccess: Date?
         var failures = 0
+        var lastObservedChange = NSPasteboard.general.changeCount
+        var lastObservedChangeAt = Date.distantPast
         while enabled && current == generation && !Task.isCancelled {
             let started = Date()
             let changeCount = NSPasteboard.general.changeCount
+            if changeCount != lastObservedChange {
+                lastObservedChange = changeCount
+                lastObservedChangeAt = started
+            }
             do {
                 // Retry receipts without ever applying their clipboard side effect again.
                 for receipt in inbox where receipt.scope == scope && receipt.pendingAck {
@@ -137,7 +149,7 @@ final class RelayController: ObservableObject {
                     guard current == generation, !Task.isCancelled else { return }
                     if let index = inbox.firstIndex(where: { $0.id == receipt.id && $0.scope == receipt.scope }) {
                         inbox[index].pendingAck = false
-                        try persist()
+                        do { try persist() } catch { throw Failure.storage }
                     }
                 }
                 let response = try JSONDecoder().decode(RelayPoll.self, from: await request("poll"))
@@ -155,7 +167,7 @@ final class RelayController: ObservableObject {
                     inbox.insert(receipt, at: 0)
                     do { try persist() } catch { inbox.removeAll { $0.id == receipt.id && $0.scope == receipt.scope }; throw Failure.storage }
                     // Persist BEFORE clipboard side effect. A crash/retry must not overwrite again.
-                    let localQuietFor = Date().timeIntervalSince(model?.lastClipboardActivity ?? Date())
+                    let localQuietFor = min(Date().timeIntervalSince(model?.lastClipboardActivity ?? Date()), Date().timeIntervalSince(lastObservedChangeAt))
                     let messageAge = (response.server_time - message.created_at) / 1000
                     let canCopy = localQuietFor > max(3, messageAge + 1) && RelayPolicy.mayAutoCopy(created: message.created_at, serverTime: response.server_time,
                         continuous: continuous && Date().timeIntervalSince(started) < 10,
@@ -180,7 +192,7 @@ final class RelayController: ObservableObject {
                 failures = min(failures + 1, 5)
                 status = "连接暂时失败，正在退避重试；恢复后的旧消息不会自动复制"
             }
-            try? await Task.sleep(nanoseconds: UInt64(failures == 0 ? 3 : min(60, 3 * (1 << failures))) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: failures == 0 ? sleepNanoseconds : min(60_000_000_000, sleepNanoseconds * UInt64(1 << failures)))
         }
     }
 

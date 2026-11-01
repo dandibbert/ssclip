@@ -49,6 +49,14 @@ jobs:
           codesign --verify --deep --strict dist/SSClip.app
           printf "%s\n" "$GITHUB_SHA" > SSClip-build-commit.txt
 
+      - name: Smoke launch packaged app with relay off by default
+        run: |
+          dist/SSClip.app/Contents/MacOS/SSClip --show-settings &
+          APP_PID=$!
+          trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
+          sleep 3
+          kill -0 "$APP_PID"
+
       - name: Package app and checksum
         run: |
           ditto -c -k --sequesterRsrc --keepParent dist/SSClip.app SSClip-macOS.zip
