@@ -44,7 +44,7 @@ struct SettingsView: View {
             HStack(spacing: 7) {
                 Image(systemName: "lock.shield")
                     .foregroundStyle(Theme.accentDeep)
-                Text("数据只保存在本机")
+                Text("历史本地保存 · 同步需开启")
             }
             .font(.system(size: 9.5))
             .foregroundStyle(.secondary)
@@ -76,6 +76,8 @@ struct SettingsView: View {
                     shortcutSettings
                 case .folder:
                     folderSettings
+                case .relay:
+                    RelaySettingsView()
                 }
             }
             .padding(.horizontal, 20)
@@ -301,7 +303,7 @@ struct SettingsView: View {
             SettingsSection(title: "系统权限") {
                 SettingsRow(verticalPadding: 10) {
                     VStack(alignment: .leading, spacing: 9) {
-                        Text("直接粘贴需要 macOS“辅助功能”权限。SSClip 不使用网络，所有历史都保存在本机。")
+                        Text("直接粘贴需要 macOS“辅助功能”权限。历史保存在本机；只有主动开启跨设备同步时才会连接服务端。")
                             .font(.system(size: 10.5))
                             .foregroundStyle(.secondary)
                         Button("打开辅助功能设置") {
@@ -450,6 +452,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case shortcut
     case folder
+    case relay
 
     var id: String { rawValue }
 
@@ -458,6 +461,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "通用"
         case .shortcut: "快捷键"
         case .folder: "收藏夹"
+        case .relay: "跨设备同步"
         }
     }
 
@@ -466,6 +470,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "剪贴板反馈、保留策略与预览"
         case .shortcut: "呼出方式与面板内操作"
         case .folder: "整理收藏内容与清理历史"
+        case .relay: "Sites 纯文本兜底 · 实验功能"
         }
     }
 
@@ -474,6 +479,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "gearshape.fill"
         case .shortcut: "keyboard.fill"
         case .folder: "folder.fill"
+        case .relay: "arrow.triangle.2.circlepath"
         }
     }
 
@@ -482,6 +488,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: Theme.settingsGeneralIcon
         case .shortcut: Theme.settingsShortcutIcon
         case .folder: Theme.settingsFolderIcon
+        case .relay: Theme.settingsGeneralIcon
         }
     }
 }

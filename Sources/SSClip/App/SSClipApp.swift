@@ -69,7 +69,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController(
                 store: appModel.store,
-                settings: appModel.settings
+                settings: appModel.settings,
+                relay: appModel.relay
             )
         }
         settingsWindowController?.show()
@@ -102,6 +103,9 @@ private struct MenuBarContent: View {
                 .disabled(true)
         }
 
+        RelayMenuContent(relay: model.relay)
+        Divider()
+
         Text("已保存 \(store.items.count) 条")
         Button("设置…") {
             model.showSettings()
@@ -110,5 +114,22 @@ private struct MenuBarContent: View {
             NSApp.terminate(nil)
         }
         .keyboardShortcut("q")
+    }
+}
+
+private struct RelayMenuContent: View {
+    @ObservedObject var relay: RelayController
+
+    var body: some View {
+        Button("发送当前纯文本 → \(destinationName)") {
+            relay.sendCurrentClipboard()
+        }
+        .disabled(!relay.enabled || relay.isSending)
+        Text(relay.status)
+            .font(.caption)
+    }
+
+    private var destinationName: String {
+        RelayController.devices.first(where: { $0.id == relay.targetID })?.name ?? relay.targetID
     }
 }

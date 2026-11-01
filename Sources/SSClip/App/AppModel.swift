@@ -14,6 +14,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var isBatchMode = false
     @Published private(set) var batchItemIDs: [UUID] = []
 
+    private(set) var lastClipboardActivity = Date()
+
     let settings: AppSettings
     let store: ClipboardStore
     let monitor: ClipboardMonitor
@@ -30,6 +32,22 @@ final class AppModel: ObservableObject {
     private var messageTask: Task<Void, Never>?
     private var cancellables: Set<AnyCancellable> = []
     private var acceptedHotKey: HotKeyConfiguration
+
+    lazy var relay = RelayController(model: self)
+
+    func removeRelayCredentialsFromHistory() {
+        for item in store.items where item.text.map(RelayCredential.isCredential) == true { store.remove(item) }
+        try? store.saveImmediately()
+    }
+
+    /// Relay never enters the batch capture path or synthesizes a paste.
+    func receiveRelayText(_ text: String) -> Bool {
+        guard !isBatchMode, RelayPolicy.validText(text), !RelayCredential.isCredential(text) else { return false }
+        let capture = CapturedClipboard(kind: .text, title: String(text.prefix(160)).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "同步文本" : String(text.prefix(160)), text: text, imageData: nil, filePaths: [])
+        guard let item = store.add(capture) else { return false }
+        store.applyRetention(cutoff: settings.retentionCutoff, maximumItems: settings.itemLimit)
+        return pasteService.write(item, imagesDirectory: store.imagesDirectory, mode: .plainText)
+    }
 
     let pageSize = 10
 
@@ -51,7 +69,10 @@ final class AppModel: ObservableObject {
         monitor.onCapture = { [weak self] capture in
             self?.handleCapture(capture)
         }
-        pasteService.beforePasteboardWrite = { [weak monitor] in monitor?.suppressNextChange() }
+        pasteService.beforePasteboardWrite = { [weak self, weak monitor] in
+            self?.lastClipboardActivity = Date()
+            monitor?.suppressNextChange()
+        }
         pasteKeyObserver.onPaste = { [weak self] in self?.advanceQueue() }
         hotKey.onPressed = { [weak self] in self?.togglePanel() }
         hotKey.register(settings.hotKey)
@@ -121,6 +142,8 @@ final class AppModel: ObservableObject {
     }
 
     func handleCapture(_ capture: CapturedClipboard) {
+        lastClipboardActivity = Date()
+        if let text = capture.text, RelayCredential.isCredential(text) { return }
         let added = store.add(capture)
         if isBatchMode, let added {
             batchItemIDs.append(added.id)
@@ -174,6 +197,7 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
+        _ = relay
         store.applyRetention(cutoff: settings.retentionCutoff, maximumItems: settings.itemLimit)
         monitor.start()
     }

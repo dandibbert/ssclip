@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - codex/ssclip-relay-test
     tags:
       - "v*"
   pull_request:
@@ -21,8 +22,10 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Show Swift version
-        run: swift --version
+      - name: Show Swift version and verify Apple Silicon runner
+        run: |
+          swift --version
+          test "$(uname -m)" = arm64
 
       - name: Run tests
         run: swift test
@@ -40,6 +43,12 @@ jobs:
       - name: Build app bundle
         run: ./scripts/build-app.sh
 
+      - name: Verify Apple Silicon app
+        run: |
+          test "$(lipo -archs dist/SSClip.app/Contents/MacOS/SSClip)" = arm64
+          codesign --verify --deep --strict dist/SSClip.app
+          printf "%s\n" "$GITHUB_SHA" > SSClip-build-commit.txt
+
       - name: Package app and checksum
         run: |
           ditto -c -k --sequesterRsrc --keepParent dist/SSClip.app SSClip-macOS.zip
@@ -53,6 +62,7 @@ jobs:
           path: |
             SSClip-macOS.zip
             SSClip-macOS.zip.sha256
+            SSClip-build-commit.txt
           if-no-files-found: error
           retention-days: 14
 
