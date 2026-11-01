@@ -1,0 +1,55 @@
+name: iOS Shortcut Signing
+on:
+  push:
+    branches: [codex/ssclip-relay-test]
+    paths:
+      - '.github/workflows/ios-shortcut.yml'
+      - 'shortcuts/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  signing:
+    runs-on: macos-15
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Official signing feasibility probe (no credentials or user data)
+        run: |
+          mkdir -p shortcut-output
+          python3 - <<'PY'
+          import plistlib, pathlib, subprocess
+          out = pathlib.Path("shortcut-output")
+          payload = {
+            "WFWorkflowClientVersion": "3036.0.4",
+            "WFWorkflowClientRelease": "18.0",
+            "WFWorkflowMinimumClientVersion": 900,
+            "WFWorkflowMinimumClientVersionString": "900",
+            "WFWorkflowIcon": {"WFWorkflowIconStartColor": 4282601983, "WFWorkflowIconGlyphNumber": 59771},
+            "WFWorkflowInputContentItemClasses": [],
+            "WFWorkflowTypes": [],
+            "WFWorkflowImportQuestions": [],
+            "WFWorkflowActions": [{"WFWorkflowActionIdentifier": "is.workflow.actions.gettext",
+              "WFWorkflowActionParameters": {"WFTextActionText": "SSClip signing probe — no credentials", "UUID": "26DE978F-83EB-4525-A05C-C48F642A897E"}}]
+          }
+          source = out / "SSClip-signing-probe-unsigned.shortcut"
+          source.write_bytes(plistlib.dumps(payload, fmt=plistlib.FMT_BINARY))
+          command = ["/usr/bin/shortcuts", "sign", "--mode", "anyone", "--input", str(source), "--output", str(out / "SSClip-signing-probe.shortcut")]
+          result = subprocess.run(command, capture_output=True, text=True, timeout=150)
+          print(result.stdout)
+          print(result.stderr)
+          print("OFFICIAL_SIGN_EXIT", result.returncode)
+          (out / "signing-result.txt").write_text(result.stdout + result.stderr + "\nexit=" + str(result.returncode))
+          if result.returncode: raise SystemExit(result.returncode)
+          signed = out / "SSClip-signing-probe.shortcut"
+          assert signed.exists() and signed.stat().st_size > 0
+          print("SIGNED_SIZE", signed.stat().st_size)
+          print("SIGNED_MAGIC", signed.read_bytes()[:16].hex())
+          PY
+      - name: Upload signing probe diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-shortcut-signing-probe
+          path: shortcut-output/
+          retention-days: 14
