@@ -86,3 +86,8 @@ scripts/          本地应用打包与图标工具
 ## License
 
 本项目采用 [MIT License](LICENSE)。
+
+
+### iPhone 入口
+
+在 Mac 的跨设备同步设置中点击“生成 iPhone 快捷指令”，由本人已登录 iCloud 的 Mac 使用 Apple 官方工具签名，再 AirDrop 到 iPhone。首次只选连接 JSON 和默认 Mac，之后点一次发送。另有“生成 iPhone 设置入口”用于重新配置。配置模板无生产密钥；云 CI 未登录 iCloud，**未预签名、未做 iPhone 实机运行验证**。详见 [iOS 模板说明](Shortcuts/IOS-SHORTCUT-NOTES.md) 与 [安装指南](RELAY-TESTING.md)。

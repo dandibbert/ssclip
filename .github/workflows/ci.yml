@@ -47,6 +47,7 @@ jobs:
         run: |
           test "$(lipo -archs dist/SSClip.app/Contents/MacOS/SSClip)" = arm64
           codesign --verify --deep --strict dist/SSClip.app
+          swift -e 'import Foundation; let b = Bundle(path: CommandLine.arguments[1])!; for n in ["SSClip-Send", "SSClip-Settings"] { guard let u = b.url(forResource: n, withExtension: "unsigned.shortcut"), let d = try? Data(contentsOf: u), !d.isEmpty else { fatalError("Missing bundled shortcut template") }; print(n + ": resource lookup OK") }' dist/SSClip.app
           printf "%s\n" "$GITHUB_SHA" > SSClip-build-commit.txt
 
       - name: Smoke launch packaged app with relay off by default

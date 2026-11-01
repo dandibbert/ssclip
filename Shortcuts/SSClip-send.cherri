@@ -1,0 +1,267 @@
+#define name SSClip发送
+#define inputs text
+#define color teal
+#define glyph clipboard
+#define version 17
+#include 'actions/documents'
+#include 'actions/device'
+#include 'actions/web'
+#include 'actions/crypto'
+#include 'actions/text'
+#include 'actions/sharing'
+
+// Storage is intentionally the user's private iCloud Drive/Shortcuts area.
+action 'documentpicker.open' loadSSClipState() {
+ "WFFileStorageService":"iCloud Drive", "WFShowFilePicker":false,
+ "WFGetFilePath":"SSClip/connection-state.json", "WFFileErrorIfNotFound":false
+}
+action 'documentpicker.open' loadSSClipIdentity() {
+ "WFFileStorageService":"iCloud Drive", "WFShowFilePicker":false,
+ "WFGetFilePath":"SSClip/phone-id.txt", "WFFileErrorIfNotFound":false
+}
+action 'documentpicker.save' saveSSClipState(variable content: 'WFInput') {
+ "WFFileStorageService":"iCloud Drive", "WFAskWhereToSave":false,
+ "WFFileDestinationPath":"SSClip/connection-state.json", "WFSaveFileOverwrite":true
+}
+action 'documentpicker.save' saveSSClipIdentity(variable content: 'WFInput') {
+ "WFFileStorageService":"iCloud Drive", "WFAskWhereToSave":false,
+ "WFFileDestinationPath":"SSClip/phone-id.txt", "WFSaveFileOverwrite":true
+}
+action 'file.createfolder' makeSSClipFolder() {
+ "WFFileStorageService":"iCloud Drive", "WFFilePath":"SSClip"
+}
+// No third-party action, webpage JavaScript, key-in-URL, or embedded credential.
+comment('SSClip：首次选择管理端导出的连接 JSON，选择默认 Mac；之后运行直接发送剪贴板纯文本。可选“SSClip设置”用于更换目标/重新导入。配置明文保存在本人 iCloud Drive/Shortcuts/SSClip，勿分享此文件。服务器收到不等于 Mac 已复制。网络失败不自动重发。')
+@setupInput = ShortcutInput
+@stateFile = loadSSClipState()
+@needsConfig = 0
+@needsTarget = 0
+@setupOnly = 0
+@apiKey = ""
+@targetID = ""
+@targetName = ""
+if @setupInput.text == "SSCLIP_SETUP_V1" {
+ @setupOnly = 1
+ if @stateFile {
+  menu "SSClip 设置" {
+   item "更换默认 Mac":
+    @needsTarget = 1
+   item "重新导入连接配置":
+    @needsConfig = 1
+    @needsTarget = 1
+  }
+ }
+}
+if @stateFile {
+ if @needsConfig != 1 {
+  @state = getDictionary(@stateFile)
+  @stateVersion = @state['version']
+  if @stateVersion.number != 1 {
+   alert("本机配置版本不兼容。请运行“SSClip设置”选择重新导入配置。", "未发送")
+   stop()
+  }
+  @server = getText(@state['server_url'])
+  @apiKey = getText(@state['api_key'])
+  @targetID = getText(@state['target_id'])
+  @targetName = getText(@state['target_name'])
+ }
+} else {
+ @needsConfig = 1
+ @needsTarget = 1
+ @setupOnly = 1
+}
+if @needsConfig == 1 {
+ confirm("请选择你在 SSClip 管理端导出的连接 JSON。首次配置只保存连接，不会发送当前剪贴板。配置会存到本人 iCloud Drive/Shortcuts/SSClip，请勿分享。", "连接 SSClip")
+ @configFile = selectFile()
+ @configText = getText(@configFile)
+ @config64 = base64Encode(@configText)
+ @config64Compact = replaceText('\s', "", @config64, true, true)
+ @config64Length = count(@config64Compact, "Characters")
+ @configPadding = 0
+ if @config64Compact endsWith "=" { @configPadding = 1 }
+ if @config64Compact endsWith "==" { @configPadding = 2 }
+ @configLength = @config64Length / 4
+ @configLength *= 3
+ @configLength -= @configPadding
+ if @configLength > 16384 {
+  alert("配置文件过大，请选择管理端导出的连接 JSON。", "未导入")
+  stop()
+ }
+ @config = getDictionary(@configText)
+ @format = getText(@config['format'])
+ @version = @config['version']
+ if @format.text != "ssclip-connection" {
+  alert("这不是 SSClip 连接配置。原配置未改变。", "未导入")
+  stop()
+ }
+ if @version.number != 1 {
+  alert("不支持此配置版本。原配置未改变。", "未导入")
+  stop()
+ }
+ @server = getText(@config['server_url'])
+ @apiKey = getText(@config['api_key'])
+}
+// Only an explicitly confirmed HTTPS origin; never accept credentials, query, fragment or a path.
+@originMatch = matchText('\Ahttps://(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?::[1-9][0-9]{0,4})?/?\z', @server)
+if !@originMatch {
+ alert("服务端必须是 HTTPS 根地址，不得带账号、密码、路径、查询或片段。本版支持 ASCII 域名/IPv4，可带端口；IPv6 请改用域名。未联网、原配置未改变。", "未连接")
+ stop()
+}
+@host = getURLDetail(@server, "Host")
+@hostLength = count(@host, "Characters")
+if @hostLength > 253 {
+ alert("服务端主机名过长，未连接。", "配置无效")
+ stop()
+}
+@port = getURLDetail(@server, "Port")
+if @port {
+ if @port.number > 65535 {
+  alert("服务端端口无效，未连接。", "配置无效")
+  stop()
+ }
+}
+@server = replaceText('/$', "", @server, true, true)
+@keyMatch = matchText('\A[A-Za-z0-9_-]{32,256}\z', @apiKey)
+if !@keyMatch {
+ alert("API Key 格式无效。请重新选择管理端导出的连接 JSON。", "未连接")
+ stop()
+}
+if @needsConfig == 1 {
+ confirm("将连接：{@server}。会向此服务发送本机名称和文件中的 API Key。只使用你自己管理端导出的配置。Shortcuts 无法在此模板中保证拒绝 HTTP 重定向，请确保服务器由你信任和控制。", "确认连接地址")
+}
+@identityFile = loadSSClipIdentity()
+if @identityFile {
+ @phoneID = getText(@identityFile)
+ @identityMatch = matchText('\Aios-[0-9]{9}-[0-9]{9}-[0-9]{9}-[0-9]{9}\z', @phoneID)
+ if !@identityMatch {
+  alert("手机身份文件异常。请在文件 App 中移除 Shortcuts/SSClip/phone-id.txt 后重试。没有发送。", "未连接")
+  stop()
+ }
+} else {
+ @r1 = randomNumber(100000000,999999999)
+ @r2 = randomNumber(100000000,999999999)
+ @r3 = randomNumber(100000000,999999999)
+ @r4 = randomNumber(100000000,999999999)
+ @phoneID = "ios-{@r1}-{@r2}-{@r3}-{@r4}"
+ makeSSClipFolder()
+ saveSSClipIdentity(@phoneID)
+}
+@deviceName = getDeviceDetail("Device Name")
+@nameParts = matchText('^[^\p{Cc}]{1,40}', @deviceName)
+@phoneName = "iPhone"
+if @nameParts { @phoneName = getFirstItem(@nameParts) }
+@registerRaw = jsonRequest("{@server}/api/service/register", "POST", {"id":"{@phoneID}", "name":"{@phoneName}", "platform":"ios"}, {"Authorization":"Bearer {@apiKey}"})
+@registered = getDictionary(@registerRaw)
+@registeredDeviceRaw = @registered['device']
+if !@registeredDeviceRaw {
+ alert("手机注册未成功。请确认 API 已开放、连接配置仍有效。未发送。", "连接失败")
+ stop()
+}
+@registeredDevice = getDictionary(@registeredDeviceRaw)
+@registeredID = getText(@registeredDevice['id'])
+if @registeredID.text != @phoneID {
+ alert("手机注册未成功。请确认 API 已开放、配置仍有效。未发送，也未修改原连接配置。", "连接失败")
+ stop()
+}
+@devicesRaw = downloadURL("{@server}/api/service/devices", {"Authorization":"Bearer {@apiKey}"})
+@deviceResponse = getDictionary(@devicesRaw)
+@devices = @deviceResponse['devices']
+@choices = []
+@choiceMap = {}
+@targetFound = 0
+for device in @devices {
+ @item = getDictionary(@device)
+ @platform = getText(@item['platform'])
+ @id = getText(@item['id'])
+ @name = getText(@item['name'])
+ if @platform.text == "macos" {
+  if @id.text != @phoneID {
+   @idMatch = matchText('\A[A-Za-z0-9_-]{8,96}\z', @id)
+   if @idMatch {
+    @label = "{@name} · {@id}"
+    @choices += @label
+    @choiceMap = setValue(@choiceMap, @label, @id)
+    if @id.text == @targetID {
+     @targetFound = 1
+     @targetName = @name
+    }
+   }
+  }
+ }
+}
+if @needsTarget == 1 {
+ if !@choices {
+  alert("没有找到 Mac。请先在 Mac SSClip 导入同一配置，并点击刷新设备，再运行本快捷指令。原连接配置未改变。", "尚未设置目标")
+  stop()
+ }
+ @choice = chooseFromList(@choices, "选择默认接收 Mac（只在设置时选择）")
+ @targetID = getValue(@choiceMap, @choice)
+ @targetName = @choice
+ @newState = {"version":1,"server_url":"{@server}","api_key":"{@apiKey}","target_id":"{@targetID}","target_name":"{@targetName}"}
+ @newStateText = getText(@newState)
+ makeSSClipFolder()
+ saveSSClipState(@newStateText)
+ alert("已连接并保存默认目标：{@targetName}。以后复制纯文本后点“SSClip发送”即可。本次未发送剪贴板。", "SSClip 设置完成")
+ stop()
+}
+if @targetFound != 1 {
+ alert("原默认 Mac 不在设备列表中，未自动改选。请运行“SSClip设置”重新选择。", "未发送")
+ stop()
+}
+// Only now read clipboard: setup never reads it, and HTTP/file responses cannot become accidental input.
+@clipboard = getClipboard()
+@clipboardType = typeOf(@clipboard)
+@textType = matchText('^(Text|Rich Text|Rich text|文本|富文本|文字|格式化文字)$', @clipboardType)
+if !@textType {
+ alert("剪贴板不是文本（图片、文件不会读取或上传）。请复制纯文本后重试。", "未发送")
+ stop()
+}
+@text = getText(@clipboard)
+if !@text {
+ alert("剪贴板中没有纯文本。", "未发送")
+ stop()
+}
+if @text == @apiKey {
+ alert("当前剪贴板是 API Key，已阻止发送。", "未发送")
+ stop()
+}
+@configMarker = matchText('"format"\s*:\s*"ssclip-connection"', @text)
+if @configMarker {
+ alert("当前剪贴板疑似连接配置，已阻止发送。", "未发送")
+ stop()
+}
+// Base64 encodes native text as UTF-8; strip wrapping and subtract padding for exact byte length.
+@encoded = base64Encode(@text)
+@compact64 = replaceText('\s', "", @encoded, true, true)
+@base64Length = count(@compact64, "Characters")
+@padding = 0
+if @compact64 endsWith "=" { @padding = 1 }
+if @compact64 endsWith "==" { @padding = 2 }
+@byteCount = @base64Length / 4
+@byteCount *= 3
+@byteCount -= @padding
+if @byteCount > 32768 {
+ alert("纯文本超过 32 KiB，未发送。请缩短内容。", "未发送")
+ stop()
+}
+@m1 = randomNumber(100000000,999999999)
+@m2 = randomNumber(100000000,999999999)
+@m3 = randomNumber(100000000,999999999)
+@m4 = randomNumber(100000000,999999999)
+@messageID = "msg-{@m1}-{@m2}-{@m3}-{@m4}"
+@sendRaw = jsonRequest("{@server}/api/service/send", "POST", {"id":"{@messageID}","source":"{@phoneID}","target":"{@targetID}","text":"{@text}","ttl_seconds":1200}, {"Authorization":"Bearer {@apiKey}"})
+@sent = getDictionary(@sendRaw)
+@returnedID = getText(@sent['id'])
+@sendState = getText(@sent['state'])
+if @returnedID.text == @messageID {
+ if @sendState.text == "pending" {
+  alert("服务器已接收 → {@targetName}。20 分钟内有效；不代表 Mac 已复制。", "SSClip")
+  stop()
+ }
+ if @sendState.text == "acknowledged" {
+  alert("服务器记录该消息已被接收端确认；是否写入剪贴板请看 Mac 状态。", "SSClip")
+  stop()
+ }
+}
+alert("未确认发送成功，可能已到达。请先检查 Mac，勿直接重复发送。不要分享包含配置的运行详情。", "SSClip")
+stop()

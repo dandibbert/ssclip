@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct RelaySettingsView: View {
     @EnvironmentObject private var relay: RelayController
     @EnvironmentObject private var settings: AppSettings
+    @StateObject private var shortcutExporter = IOSShortcutExporter()
     @State private var deviceName = ""
     @State private var serviceURL = ""
     @State private var apiKey = ""
@@ -51,16 +52,48 @@ struct RelaySettingsView: View {
             }
 
             Divider()
+            iphoneSetup
+            Divider()
             DisclosureGroup("连接与高级设置", isExpanded: $advancedExpanded) {
                 advancedSettings.padding(.top, 8)
             }
-            Text("只在点击发送时上传纯文本，最多 32 KiB。服务端明文暂存，最长 20 分钟有效，不是端到端加密；本机收件箱与历史另行保留。不要发送密码等敏感信息。Bark 尚未接入。")
+            Text("只在点击发送时上传纯文本，最多 32 KiB。服务端明文暂存，最长 20 分钟有效，不是端到端加密；本机收件箱与历史另行保留。不要发送密码等敏感信息。iPhone 接收可在管理端配置 Bark；Bark 最多 2000 UTF-8 字节并受通知总大小限制，不会截断文本。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
         .font(.system(size: 12))
         .onAppear { updateDrafts() }
-        .onDisappear { apiKey = "" }
+        .onDisappear { apiKey = ""; shortcutExporter.cancel() }
+    }
+
+    private var iphoneSetup: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Label("iPhone 发送剪贴板", systemImage: "iphone")
+                .font(.headline)
+            Text("在已登录 iCloud 的这台 Mac 生成一次快捷指令，AirDrop 到 iPhone 并打开安装。首次运行选择管理端导出的连接 JSON 和目标 Mac，以后直接运行发送。")
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button(shortcutExporter.isBusy ? "正在生成…" : "生成 iPhone 快捷指令") {
+                    shortcutExporter.chooseDestination()
+                }
+                .disabled(shortcutExporter.isBusy)
+                if shortcutExporter.isBusy {
+                    ProgressView().controlSize(.small)
+                    Button("取消") { shortcutExporter.cancel() }
+                }
+            }
+            Button("生成 iPhone 设置入口（可选）") {
+                shortcutExporter.chooseDestination(template: .settings)
+            }
+            .disabled(shortcutExporter.isBusy)
+            Text("首次只需“SSClip发送”；“SSClip设置”用于以后重选目标 Mac 或重新导入。请保留这两个快捷指令名称。")
+                .font(.caption).foregroundStyle(.secondary)
+            if !shortcutExporter.status.isEmpty {
+                Text(shortcutExporter.status).font(.caption).foregroundStyle(.secondary)
+            }
+            Text("使用 Apple 官方签名，不需要提供 Apple 密码；模板不含 API Key。未签名模板不能直接安装到 iPhone。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     private var setupCard: some View {

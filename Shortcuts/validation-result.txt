@@ -1,0 +1,4 @@
+PASS: 727 structural/privacy/math checks; 412 main actions, 4 helper actions. iOS runtime and Apple signing NOT verified by these checks.
+e65c8251cb25c54ad5d426ac8ff0ac02ba031d4f0af970911e120723e275e7c7 SSClip设置_unsigned.shortcut
+d044405c2c1af6426dc73c5d79732934fc14be56cab659e7be35391857f75a79 SSClip发送_unsigned.shortcut
+Unsigned resources generated. Apple signing and iOS runtime remain separate required checks.

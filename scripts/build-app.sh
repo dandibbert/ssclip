@@ -32,6 +32,11 @@ mkdir -p "$STAGED_APP/Contents/MacOS" "$STAGED_APP/Contents/Resources"
 cp "$BIN_DIR/SSClip" "$STAGED_APP/Contents/MacOS/SSClip"
 cp "$PROJECT_DIR/Resources/Info.plist" "$STAGED_APP/Contents/Info.plist"
 cp "$ICON_FILE" "$STAGED_APP/Contents/Resources/AppIcon.icns"
+for TEMPLATE in SSClip-Send.unsigned.shortcut SSClip-Settings.unsigned.shortcut; do
+    test -s "$PROJECT_DIR/Resources/$TEMPLATE"
+    cp "$PROJECT_DIR/Resources/$TEMPLATE" "$STAGED_APP/Contents/Resources/$TEMPLATE"
+    /usr/bin/plutil -lint "$STAGED_APP/Contents/Resources/$TEMPLATE"
+done
 codesign --force --deep --sign - "$STAGED_APP"
 codesign --verify --deep --strict "$STAGED_APP"
 

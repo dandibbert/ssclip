@@ -53,6 +53,9 @@ private final class RelayHTTPScenario: @unchecked Sendable {
             return (200, try! JSONSerialization.data(withJSONObject: ["devices": [device, mode == "peerGone" ? replacement : peer], "server_time": 1]))
         }
         if path == "send", mode == "holdSend" { return nil }
+        if path == "send" && mode == "barkLarge" { return (413, Data("{\"error\":\"bark_text_too_large\"}".utf8)) }
+        if path == "send" && mode == "barkUnknown" { return (502, Data("{\"error\":\"bark_delivery_unknown\"}".utf8)) }
+        if path == "send" && mode == "barkSubmitted" { return (200, Data("{\"state\":\"pending\",\"delivery\":\"submitted\"}".utf8)) }
         if path == "send" { return (200, Data("{\"state\":\"pending\"}".utf8)) }
         if request.url?.host == "new-relay.example.test", path == "poll" {
             return (200, Data("{\"messages\":[],\"server_time\":1}".utf8))
@@ -423,6 +426,27 @@ struct RelayNetworkTests {
 
     private func configurationData(url: String = "https://relay.example.test") -> Data {
         try! JSONSerialization.data(withJSONObject: ["format": "ssclip-connection", "version": 1, "server_url": url, "api_key": testAPIKey])
+    }
+
+    @Test(arguments: ["barkLarge", "barkUnknown", "barkSubmitted"])
+    func barkHTTPResultsUseSafeSpecificFeedback(_ mode: String) async throws {
+        let context = try makeContext(mode: mode)
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        context.controller.selectTarget(testPeerID)
+        context.pasteboard.clearContents()
+        context.pasteboard.setString("ordinary text", forType: .string)
+        context.controller.sendCurrentClipboard()
+        try await eventually { context.scenario.count("send") == 1 && !context.controller.isSending }
+        if mode == "barkLarge" { #expect(context.controller.status.contains("未截断")) }
+        if mode == "barkUnknown" { #expect(context.controller.status.contains("先检查 iPhone")) }
+        if mode == "barkSubmitted" {
+            #expect(context.controller.status.contains("Bark 已接受推送"))
+            #expect(context.controller.status.contains("不代表手机已收到或复制"))
+        }
+        #expect(!context.controller.status.contains("ordinary text"))
+        #expect(!context.controller.status.contains(testAPIKey))
     }
 
     private func eventually(_ condition: () -> Bool) async throws {

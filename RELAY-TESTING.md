@@ -30,8 +30,27 @@
 
 接收先原子保存本地回执，再至多写一次剪贴板；ACK 重试不会重复覆盖。不同服务/设备的回执隔离。收件箱损坏、无法保存或容量满时停止确认。发送结果不明不会自动重发，先检查对端，避免重复。
 
-Bark 尚未接入；iPhone 使用网页。没有自动模拟粘贴，普通历史、收藏、快捷键、批量功能保留。
+iPhone 接收可在管理端配置 Bark（最多 2000 UTF-8 字节并受通知总大小限制，不截断）；推送被接受不等于手机收到或复制。没有自动模拟粘贴，普通历史、收藏、快捷键、批量功能保留。
 
 ## 构建验证
 
 CI 对精确提交在 macOS Apple Silicon 运行完整 Swift 测试、release 打包、arm64 和签名验证、启动实际包进程烟测；ZIP 附 SHA256 与 source commit。包为 ad-hoc 临时签名，未做 Apple 公证，系统可能要求在隐私与安全性中允许打开。自动测试不等于真人多设备长期睡眠/切网测试。
+
+
+## iPhone 发送入口（本轮新增）
+
+1. 更新 Mac 测试版，打开 SSClip → 设置 → 跨设备同步 → iPhone 设置，点击“生成 iPhone 快捷指令”。这台 Mac 必须已经登录 iCloud；按钮用系统 `/usr/bin/shortcuts sign --mode anyone`，不会索要或代填 Apple 账号。
+2. 保存生成的 **SSClip发送.shortcut**，AirDrop 给 iPhone 并打开添加。不要改变主快捷指令名称。首次运行选择原来的连接 JSON，确认服务端地址并选择默认 Mac；首次只配置，不发送剪贴板。
+3. 此后复制纯文本，运行“SSClip发送”即可。可另外生成/安装 **SSClip设置**，以后用来重选默认 Mac 或重新导入配置。
+
+模板使用配置中的 HTTPS 根地址，支持复用兼容的自建服务；原生快捷指令 HTTP 的重定向行为未在 iPhone 实测，不声称像 Mac URLSession 一样禁用重定向。只导入本人可信管理端配置。手机配置明文保存在本人 iCloud Drive/Shortcuts/SSClip，不分享该目录。本版一台 iPhone；多台同账号手机会共享该状态。
+
+**验证边界**：GitHub macOS runner 的官方签名已实际尝试，因未登录 iCloud 被拒绝。CI 的模板解析/动作注册表对照与注入签名测试不是实际签名成功，也不是 iPhone 实机执行验证。Mac 按钮只有官方工具成功且输出为非空 AEA1 封装时才保存安装文件；失败/取消不替换原文件。无 Apple 账号的云端无法预先替你签成可安装文件。
+
+备用：仓库 `Shortcuts/Sign-on-Mac.command` 调用同一官方命令，不改 Gatekeeper、下载隔离属性或系统设置。下载脚本可能被系统阻止直接打开；优先使用应用按钮，不要为此关闭安全机制。技术用户的一条等效命令（将输出位置改为新文件，避免覆盖）：
+
+```sh
+/usr/bin/shortcuts sign --mode anyone --input "/Applications/SSClip.app/Contents/Resources/SSClip-Send.unsigned.shortcut" --output "$HOME/Desktop/SSClip发送.shortcut"
+```
+
+建议使用应用按钮或备用脚本，它们会以正确中文文件名暂存输入来保持导入名；直接命令后仍需确认 iPhone 上的主名称为“SSClip发送”。`Resources/*.unsigned.shortcut` 是未签名模板，不能直接当作安装文件打开。

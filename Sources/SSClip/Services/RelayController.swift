@@ -201,7 +201,7 @@ final class RelayController: ObservableObject {
         connect(startReceiving: true)
     }
 
-    private enum Failure: Error { case http(Int), invalid, storage }
+    private enum Failure: Error { case http(Int), service(String), invalid, storage }
     private func request(_ endpoint: String, body: [String: Any]? = nil) async throws -> Data {
         guard let base = RelayPolicy.baseURL(serviceURL), let credential = credentialReader(serviceURL) else { throw Failure.invalid }
         var components = URLComponents(url: base.appendingPathComponent("api/service/" + endpoint), resolvingAgainstBaseURL: false)!
@@ -217,7 +217,14 @@ final class RelayController: ObservableObject {
         let (data, response) = try await session.data(for: req)
         try Task.checkCancellation()
         guard let http = response as? HTTPURLResponse else { throw Failure.invalid }
-        guard (200...299).contains(http.statusCode) else { throw Failure.http(http.statusCode) }
+        guard (200...299).contains(http.statusCode) else {
+            if endpoint == "send", [409, 413, 502, 503].contains(http.statusCode), data.count <= 4096,
+               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let code = object["error"] as? String, RelayServiceError.message(for: code) != nil {
+                throw Failure.service(code)
+            }
+            throw Failure.http(http.statusCode)
+        }
         guard data.count < 1_000_000 else { throw Failure.invalid }
         return data
     }
@@ -328,11 +335,17 @@ final class RelayController: ObservableObject {
             guard let self, current == self.generation, !Task.isCancelled else { return }
             defer { if current == self.generation { self.isSending = false } }
             do {
-                _ = try await self.request("send", body: body)
+                let response = try await self.request("send", body: body)
                 guard current == self.generation, !Task.isCancelled else { return }
-                self.sendFeedback("服务器已接收 → \(destinationName)；不代表对方已复制")
+                let object = try? JSONSerialization.jsonObject(with: response) as? [String: Any]
+                if object?["delivery"] as? String == "submitted" {
+                    self.sendFeedback("Bark 已接受推送 → \(destinationName)；不代表手机已收到或复制")
+                } else { self.sendFeedback("服务器已接收 → \(destinationName)；不代表对方已复制") }
             } catch {
                 guard current == self.generation, !Task.isCancelled else { return }
+                if case Failure.service(let code) = error, let message = RelayServiceError.message(for: code) {
+                    self.sendFeedback(message); return
+                }
                 if case Failure.http(let code) = error, code == 401 || code == 403 {
                     self.setEnabled(false); self.sendFeedback("未确认发送：API Key 无效，请重新导入连接配置")
                 } else { self.sendFeedback("发送结果未确认；可能已到达，请先检查 \(destinationName) 再重发") }
