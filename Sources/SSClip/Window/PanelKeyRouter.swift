@@ -14,6 +14,7 @@ enum PanelKeyCommand: Equatable {
     case nextPage
     case pasteSelected
     case showPreview
+    case openSettings
 }
 
 enum PanelKeyRouter {
@@ -36,6 +37,12 @@ enum PanelKeyRouter {
         if isComposing { return nil }
 
         let modifiers = significantModifiers(in: event)
+        // SSClip 是菜单栏应用，没有主菜单承接 ⌘,，只能在面板里自己处理；
+        // 用户若把面板内快捷键设成了 ⌘,，以用户设置为准。
+        if isOpenSettings(event),
+           !shortcuts.labeled.contains(where: { $0.configuration.matches(event) }) {
+            return .openSettings
+        }
         if shortcuts.search.matches(event) {
             return .activateSearch
         }
@@ -108,6 +115,15 @@ enum PanelKeyRouter {
         guard let scalar = event.charactersIgnoringModifiers?.unicodeScalars.first else { return true }
         return CharacterSet.controlCharacters.contains(scalar)
             || (0xF700...0xF8FF).contains(scalar.value)
+    }
+
+    /// 只认单独的 ⌘ 加逗号；按字符判断以适配不同键盘布局，字符不是逗号时（如俄文布局）退回 ANSI 键位。
+    static func isOpenSettings(_ event: NSEvent) -> Bool {
+        guard significantModifiers(in: event) == .command else { return false }
+        if let value = event.charactersIgnoringModifiers, !value.isEmpty, value.unicodeScalars.allSatisfy(\.isASCII) {
+            return value == ","
+        }
+        return event.keyCode == 43
     }
 
     private static func pasteIndex(from event: NSEvent) -> Int? {

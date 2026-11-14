@@ -150,6 +150,9 @@ final class ClipboardPanelController: NSObject, NSWindowDelegate {
             model.pasteSelected()
         case .showPreview:
             model.showPreviewImmediately()
+        case .openSettings:
+            // 先让这次按键在面板里处理完，再隐藏面板、激活应用并打开设置窗口。
+            DispatchQueue.main.async { [weak model] in model?.showSettings() }
         }
         return true
     }
