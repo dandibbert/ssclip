@@ -37,6 +37,9 @@ struct ClipboardItem: Identifiable, Codable, Equatable, Sendable {
     let byteCount: Int
     var isFavorite: Bool
     var folderID: UUID?
+    /// 复制时位于最前的应用；旧版本保存的记录没有这两项。
+    let sourceAppName: String?
+    let sourceBundleID: String?
 
     init(
         id: UUID = UUID(),
@@ -51,7 +54,9 @@ struct ClipboardItem: Identifiable, Codable, Equatable, Sendable {
         fingerprint: String,
         byteCount: Int = 0,
         isFavorite: Bool = false,
-        folderID: UUID? = nil
+        folderID: UUID? = nil,
+        sourceAppName: String? = nil,
+        sourceBundleID: String? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -66,10 +71,12 @@ struct ClipboardItem: Identifiable, Codable, Equatable, Sendable {
         self.byteCount = byteCount
         self.isFavorite = isFavorite
         self.folderID = folderID
+        self.sourceAppName = sourceAppName
+        self.sourceBundleID = sourceBundleID
     }
 
     var searchableText: String {
-        ([title, text ?? ""] + filePaths).joined(separator: " ")
+        ([title, text ?? "", sourceAppName ?? ""] + filePaths).joined(separator: " ")
     }
 
     var detail: String {

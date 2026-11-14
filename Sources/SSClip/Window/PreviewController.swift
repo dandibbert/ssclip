@@ -133,6 +133,9 @@ private struct TextPreview: View {
             item.detail,
             item.createdAt.formatted(date: .abbreviated, time: .shortened)
         ]
+        if let sourceAppName = item.sourceAppName {
+            parts.append(sourceAppName)
+        }
         if item.isFavorite {
             parts.append(item.folderID == nil ? "未分类收藏" : "收藏夹")
         }
@@ -174,7 +177,8 @@ private struct ImagePreview: View {
         VStack(spacing: 0) {
             PreviewHeader(
                 item: item,
-                subtitle: item.createdAt.formatted(date: .abbreviated, time: .shortened)
+                subtitle: ([item.createdAt.formatted(date: .abbreviated, time: .shortened)]
+                    + [item.sourceAppName].compactMap { $0 }).joined(separator: " · ")
             )
 
             Group {

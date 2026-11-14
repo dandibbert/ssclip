@@ -157,16 +157,65 @@ struct BatchModeTests {
         #expect(!model.isInBatch(item))
     }
 
-    @Test func pasteKeyObserverSkipsIgnoredPastes() {
+    @Test func secondPasteBeforeHeadIsRewrittenDoesNotSkipAnItem() async throws {
+        let context = try makeContext()
+        defer { context.cleanUp() }
+        let model = context.model
+        model.queueAdvanceDelay = 0.05
+        model.toggleBatchMode()
+        for value in ["1", "2", "3"] {
+            model.handleCapture(makeCapture(value))
+        }
+
+        // 连按两次 ⌘V：第二次发生时 2 还没写上剪贴板，粘出的仍是 1，不能把 2 弹掉。
+        model.advanceQueue()
+        model.advanceQueue()
+        #expect(model.batchItems.map(\.title) == ["2", "3"])
+
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(context.pasteboard.string(forType: .string) == "2")
+
+        model.advanceQueue()
+        #expect(model.batchItems.map(\.title) == ["3"])
+    }
+
+    @Test func turningBatchModeOffCancelsThePendingHeadWrite() async throws {
+        let context = try makeContext()
+        defer { context.cleanUp() }
+        let model = context.model
+        model.queueAdvanceDelay = 0.05
+        model.toggleBatchMode()
+        model.handleCapture(makeCapture("1"))
+        model.handleCapture(makeCapture("2"))
+
+        model.advanceQueue()
+        model.toggleBatchMode()
+        try await Task.sleep(nanoseconds: 200_000_000)
+
+        #expect(context.pasteboard.string(forType: .string) == "1")
+    }
+
+    @Test func pasteKeyObserverCountsOnlyRealPasteKeystrokes() {
+        #expect(PasteKeyObserver.isPaste(modifierFlags: [.command], characters: "v", isRepeat: false))
+        #expect(PasteKeyObserver.isPaste(modifierFlags: [.command, .capsLock], characters: "V", isRepeat: false))
+        #expect(PasteKeyObserver.isPaste(modifierFlags: [.command, .shift], characters: "v", isRepeat: false))
+        #expect(!PasteKeyObserver.isPaste(modifierFlags: [.command], characters: "v", isRepeat: true))
+        #expect(!PasteKeyObserver.isPaste(modifierFlags: [.command, .control], characters: "v", isRepeat: false))
+        #expect(!PasteKeyObserver.isPaste(modifierFlags: [], characters: "v", isRepeat: false))
+        #expect(!PasteKeyObserver.isPaste(modifierFlags: [.command], characters: "c", isRepeat: false))
+    }
+
+    @Test func pasteKeyObserverIgnoresThePanelHotKey() {
         let observer = PasteKeyObserver()
         var count = 0
         observer.onPaste = { count += 1 }
+        observer.excludedHotKey = { HotKeyConfiguration() }
 
-        observer.ignoreNextPaste()
-        observer.handlePasteEvent()
+        // 默认的呼出面板快捷键 ⌥⌘V 不是粘贴。
+        observer.handleKeyDown(keyCode: 9, modifierFlags: [.command, .option], characters: "v", isRepeat: false)
         #expect(count == 0)
 
-        observer.handlePasteEvent()
+        observer.handleKeyDown(keyCode: 9, modifierFlags: [.command], characters: "v", isRepeat: false)
         #expect(count == 1)
     }
 

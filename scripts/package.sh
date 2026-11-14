@@ -31,6 +31,10 @@ mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources" "$dist"
 cp "$bin" "$app/Contents/MacOS/SSClip"
 cp Resources/Info.plist "$app/Contents/Info.plist"
 cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
+# 设置里“生成 iPhone 快捷指令”用的未签名模板。
+[ -s Resources/SSClip-Send.unsigned.shortcut ] || { echo "Missing Resources/SSClip-Send.unsigned.shortcut" >&2; exit 1; }
+cp Resources/SSClip-Send.unsigned.shortcut "$app/Contents/Resources/SSClip-Send.unsigned.shortcut"
+plutil -lint "$app/Contents/Resources/SSClip-Send.unsigned.shortcut"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" \
   -c "Set :CFBundleVersion $build_number" "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
