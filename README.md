@@ -68,6 +68,10 @@ shasum -a 256 -c SSClip-<版本>.sha256
 
 App 没有 Developer ID 签名或 Apple 公证。首次运行可能触发 Gatekeeper；可在 Finder 中右键点击 App、选择“打开”并确认。之后的版本都用同一张证书签名，应用内更新只接受与当前 App 签名一致的新版本，辅助功能授权也会保留。
 
+## 跨设备同步的自建服务端
+
+`relay-worker/` 是跨设备同步服务端的 Cloudflare Workers 版本，与同步实验分支的 Mac 客户端和 iPhone 快捷指令接口兼容。部署和使用见 [relay-worker/README.md](relay-worker/README.md)。
+
 ## 系统权限
 
 首次直接粘贴时，macOS 会请求“系统设置 → 隐私与安全性 → 辅助功能”权限。这项权限只用于向当前应用发送一次 `⌘V`。若不授权，选择内容仍会写入系统剪贴板，可手动粘贴。

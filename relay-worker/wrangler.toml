@@ -1,0 +1,16 @@
+name = "ssclip-relay"
+main = "src/index.js"
+compatibility_date = "2025-06-01"
+
+# 先运行 `npx wrangler d1 create ssclip-relay`，把输出里的 database_id 填到这里。
+[[d1_databases]]
+binding = "DB"
+database_name = "ssclip-relay"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+# 每小时清理一次过期正文；平时每个请求也会顺带清理。
+[triggers]
+crons = ["17 * * * *"]
+
+[observability]
+enabled = true
