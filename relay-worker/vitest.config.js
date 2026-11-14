@@ -8,7 +8,7 @@ export default defineWorkersConfig({
         isolatedStorage: false,
         singleWorker: true,
         wrangler: { configPath: "./wrangler.toml" },
-        miniflare: { bindings: { ADMIN_PASSWORD: "test-admin-password" } },
+        miniflare: { bindings: { ADMIN_PASSWORD: "test-admin-password", LONG_POLL_SECONDS: "0" } },
       },
     },
   },

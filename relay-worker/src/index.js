@@ -1,6 +1,7 @@
 import { handleAdmin } from "./admin.js";
 import { handleAPI } from "./api.js";
 import { cleanup, currentAPIKey, ensureSchema } from "./db.js";
+import { RelayHub } from "./hub.js";
 import { fail, secretsEqual } from "./util.js";
 
 const API_PREFIX = "/api/service/";
@@ -30,6 +31,8 @@ async function route(request, env, context) {
   }
   return fail(404, "not_found");
 }
+
+export { RelayHub };
 
 export default {
   async fetch(request, env, context) {

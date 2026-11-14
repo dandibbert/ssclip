@@ -246,6 +246,96 @@ describe("Mac 客户端流程", () => {
   });
 });
 
+describe("不轮询的接收方式", () => {
+  const nextMessage = (socket) =>
+    new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("no websocket message")), 3000);
+      socket.addEventListener("message", (event) => {
+        clearTimeout(timer);
+        resolve(event.data);
+      }, { once: true });
+    });
+
+  async function openStream(target, key = apiKey) {
+    return SELF.fetch(`${ORIGIN}/api/service/stream?target=${target}`, {
+      headers: { upgrade: "websocket", ...(key ? { authorization: `Bearer ${key}` } : {}) },
+    });
+  }
+
+  it("WebSocket 连上先收到 hello，有新消息时收到 notify，正文仍用 poll 取", async () => {
+    const sender = await registerMac();
+    const receiver = await registerMac();
+    const response = await openStream(receiver);
+    expect(response.status).toBe(101);
+    const socket = response.webSocket;
+    const hello = nextMessage(socket);
+    socket.accept();
+    expect(JSON.parse(await hello).type).toBe("hello");
+
+    const notified = nextMessage(socket);
+    const id = uuid();
+    expect((await post("send", { id, source: sender, target: receiver, text: "推过来的" })).status).toBe(200);
+    expect(JSON.parse(await notified).type).toBe("notify");
+
+    const polled = decodePollResponse(await (await api(`poll?target=${receiver}&wait=0`)).json());
+    expect(polled.messages.map((message) => message.id)).toEqual([id]);
+    expect(acceptableMessage(polled.messages[0], receiver, polled.server_time)).toBe(true);
+
+    // 心跳直接应答。
+    const pong = nextMessage(socket);
+    socket.send("ping");
+    expect(await pong).toBe("pong");
+    socket.close(1000, "done");
+  });
+
+  it("通知只发给目标设备", async () => {
+    const sender = await registerMac();
+    const receiver = await registerMac();
+    const bystander = await registerMac();
+    const response = await openStream(bystander);
+    const socket = response.webSocket;
+    const hello = nextMessage(socket);
+    socket.accept();
+    await hello;
+    let received = 0;
+    socket.addEventListener("message", () => { received += 1; });
+    await post("send", { id: uuid(), source: sender, target: receiver, text: "不是给你的" });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(received).toBe(0);
+    socket.close(1000, "done");
+  });
+
+  it("WebSocket 同样要求 API Key 和已注册的设备", async () => {
+    const receiver = await registerMac();
+    expect((await openStream(receiver, "")).status).toBe(401);
+    expect((await openStream(uuid())).status).toBe(404);
+    expect((await api(`stream?target=${receiver}`)).status).toBe(426);
+  });
+
+  it("长轮询：消息到达时挂起的 poll 立即返回", async () => {
+    const sender = await registerMac();
+    const receiver = await registerMac();
+    const started = Date.now();
+    const pending = api(`poll?target=${receiver}&wait=8`);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const id = uuid();
+    await post("send", { id, source: sender, target: receiver, text: "长轮询" });
+    const polled = decodePollResponse(await (await pending).json());
+    expect(Date.now() - started).toBeLessThan(4000);
+    expect(polled.messages.map((message) => message.id)).toEqual([id]);
+    expect(acceptableMessage(polled.messages[0], receiver, polled.server_time)).toBe(true);
+  });
+
+  it("长轮询：没有消息时等到时间后返回空列表", async () => {
+    const receiver = await registerMac();
+    const started = Date.now();
+    const polled = decodePollResponse(await (await api(`poll?target=${receiver}&wait=2`)).json());
+    expect(polled.messages).toHaveLength(0);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1900);
+    expect(Date.now() - started).toBeLessThan(4000);
+  });
+});
+
 describe("iPhone 快捷指令流程", () => {
   it("注册发送端、只列出 Mac、提交后返回 id 与 pending", async () => {
     const mac = await registerMac("接收的 Mac");

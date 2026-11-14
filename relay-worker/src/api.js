@@ -1,5 +1,6 @@
 import { BARK_ERROR_STATUS, checkBarkHost, exceedsAPNSBudget, pushToBark } from "./bark.js";
 import { publicDevice } from "./db.js";
+import { hub } from "./hub.js";
 import {
   MAX_DEVICES, MAX_TEXT_BYTES, MAX_TTL_SECONDS, PLATFORMS,
   cleanName, fail, json, readJSONObject, sha256Hex, utf8Length, validID,
@@ -10,6 +11,8 @@ const POLL_RESPONSE_BUDGET = 900_000;
 const POLL_MAX_MESSAGES = 64;
 const MAX_PENDING_PER_TARGET = 200;
 const LAST_SEEN_RESOLUTION_MS = 60_000;
+const MAX_LONG_POLL_SECONDS = 25;
+const LONG_POLL_STEP_MS = 1000;
 const IN_PROGRESS_WINDOW_MS = 60_000;
 
 const routes = {
@@ -17,6 +20,7 @@ const routes = {
   "GET devices": devices,
   "GET poll": poll,
   "GET status": status,
+  "GET stream": stream,
   "POST ack": ack,
   "POST send": send,
 };
@@ -82,17 +86,35 @@ async function pollingDevice(request, env) {
   return { device, now };
 }
 
+/** 这次 poll 最多挂多久：请求里的 wait 优先，否则用 LONG_POLL_SECONDS。 */
+function longPollMilliseconds(request, env) {
+  const requested = new URL(request.url).searchParams.get("wait");
+  const seconds = Number(requested ?? env.LONG_POLL_SECONDS ?? 0);
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return Math.min(seconds, MAX_LONG_POLL_SECONDS) * 1000;
+}
+
 async function poll(request, env) {
-  const { device, now, error } = await pollingDevice(request, env);
+  const { device, now: started, error } = await pollingDevice(request, env);
   if (error) return error;
-  const { results } = await env.DB
-    .prepare(
-      `SELECT id, source, target, text, created_at, expires_at FROM messages
-       WHERE target = ?1 AND state = 'pending' AND delivery IS NULL AND expires_at > ?2 AND text != ''
-       ORDER BY created_at, rowid LIMIT ?3`,
-    )
-    .bind(device.id, now, POLL_MAX_MESSAGES)
-    .all();
+  const deadline = started + longPollMilliseconds(request, env);
+  let now = started;
+  let results = [];
+  // 长轮询：没有消息就每秒再查一次，直到有消息、到时间或客户端断开。等待不占 CPU 时间。
+  for (;;) {
+    ({ results } = await env.DB
+      .prepare(
+        `SELECT id, source, target, text, created_at, expires_at FROM messages
+         WHERE target = ?1 AND state = 'pending' AND delivery IS NULL AND expires_at > ?2 AND text != ''
+         ORDER BY created_at, rowid LIMIT ?3`,
+      )
+      .bind(device.id, now, POLL_MAX_MESSAGES)
+      .all());
+    if (results.length > 0 || now + LONG_POLL_STEP_MS > deadline || request.signal?.aborted) break;
+    await new Promise((resolve) => setTimeout(resolve, LONG_POLL_STEP_MS));
+    now = Date.now();
+  }
+  now = Date.now();
   const messages = [];
   let size = 0;
   for (const message of results) {
@@ -101,6 +123,16 @@ async function poll(request, env) {
     messages.push(message);
   }
   return json({ messages, server_time: now });
+}
+
+/** WebSocket 推送通道：只通知“有新消息”，正文仍走 poll / ack。 */
+async function stream(request, env) {
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") return fail(426, "upgrade_required");
+  const relay = hub(env);
+  if (!relay) return fail(404, "not_found");
+  const { error } = await pollingDevice(request, env);
+  if (error) return error;
+  return relay.fetch(request);
 }
 
 async function status(request, env) {
@@ -208,7 +240,12 @@ async function send(request, env, context) {
   if (now - sender.last_seen_at >= LAST_SEEN_RESOLUTION_MS) {
     context?.waitUntil(db.prepare(`UPDATE devices SET last_seen_at = ?1 WHERE id = ?2`).bind(now, source).run());
   }
-  if (!isBark) return sendResult(message, now);
+  if (!isBark) {
+    // 目标在线就立即通知它来取；通知失败不影响入队，设备轮询或重连时照样能取到。
+    const relay = hub(env);
+    if (relay) context?.waitUntil(relay.notify(target).catch(() => {}));
+    return sendResult(message, now);
+  }
 
   const error = await deliverToBark(env, message, receiver);
   if (error) return fail(BARK_ERROR_STATUS[error], error);

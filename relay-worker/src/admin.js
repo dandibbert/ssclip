@@ -1,6 +1,7 @@
 import { deliverToBark } from "./api.js";
 import { BARK_ERROR_STATUS, DEFAULT_BARK_SERVER, parseBarkTarget } from "./bark.js";
 import { currentAPIKey, setSetting } from "./db.js";
+import { hub } from "./hub.js";
 import {
   MAX_DEVICES, cleanName, escapeHTML, randomToken, secretsEqual, sha256Hex, validAPIKey, validID,
 } from "./util.js";
@@ -81,6 +82,7 @@ export async function handleAdmin(request, env, path) {
         env.DB.prepare(`DELETE FROM devices WHERE id = ?1`).bind(field("id")),
         env.DB.prepare(`UPDATE messages SET text = '', expires_at = MIN(expires_at, ?2) WHERE target = ?1 AND state = 'pending'`).bind(field("id"), Date.now()),
       ]);
+      await hub(env)?.disconnect(field("id")).catch(() => {});
       return back("已删除设备；发给它的未读消息一并作废");
     case "/admin/bark/add":
       return addBarkTarget(env, field("name"), field("server"), field("key"));

@@ -68,6 +68,7 @@ npx wrangler secret put API_KEY
 | `GET poll?target=` | 返回 `{messages, server_time}`，按发送时间从早到晚 |
 | `POST ack` | `{id, target}` 确认接收并清除正文；未知消息 404，已过期 410 |
 | `GET status?target=` | 返回 `{device, pending, server_time}` |
+| `GET stream?target=` | WebSocket 推送通道，见下 |
 
 规则与客户端一致：
 
@@ -80,6 +81,18 @@ npx wrangler secret put API_KEY
 
 `status` 接口客户端目前没有调用，返回的字段是我定的，不是照原服务端对齐的。
 
+## 三种接收方式
+
+三种方式同时可用，客户端用哪种都行，互不影响。
+
+- **普通轮询**：`poll` 立即返回。请求里带 `wait=0`，或把 `LONG_POLL_SECONDS` 设成 `0` 时是这种行为。
+- **长轮询**：没有消息时服务端把 `poll` 挂住，消息一到立即返回，最多等 `LONG_POLL_SECONDS` 秒（默认 6）。不带 `wait` 参数的旧客户端自动得到这个行为，不用改代码；也可以用 `wait=<秒数>` 指定，上限 25。
+- **WebSocket 推送**：连接 `wss://<地址>/api/service/stream?target=<设备编号>`，同样带 `Authorization: Bearer`。连上后先收到 `{"type":"hello"}`，之后每当有发给这台设备的新消息就收到 `{"type":"notify"}`。通道只传信号，正文仍用 `poll` 取、`ack` 确认，所以通知丢失或断线都不会丢消息。客户端发文本 `ping` 会收到 `pong`。同一台设备只保留最新的一条连接。
+
+长轮询对旧客户端有一个细微影响：客户端在“请求期间本机剪贴板变过”时不自动复制收到的文本，请求变长后这个窗口从约 3 秒变成最多 6 秒，这种情况下文本只进收件箱。不想要可以把 `LONG_POLL_SECONDS` 设成 `0`。
+
+WebSocket 由一个 Durable Object 持有，连接空闲时休眠，不计时长；心跳由运行时直接应答，不会唤醒它。
+
 ## 安全
 
 - API Key 只能调用数据接口，不能打开管理页面；管理页面只认管理密码。
@@ -91,7 +104,15 @@ npx wrangler secret put API_KEY
 
 ## 用量
 
-Mac 开着“自动接收”时每 3 秒轮询一次，一台设备一天约 28800 次请求。Workers 免费版每天 10 万次请求，够两三台 Mac 常开；更多设备需要付费版。轮询只读数据库，在线时间每分钟最多写一次。
+Workers 免费版每天 10 万次请求。一台开着“自动接收”的 Mac 每天大约用掉：
+
+| 接收方式 | 请求数 |
+| --- | --- |
+| WebSocket 推送（新客户端） | 约 300：每 5 分钟一次兜底检查，加上重连 |
+| 长轮询（旧客户端，默认） | 约 10000 |
+| 普通轮询（`LONG_POLL_SECONDS = "0"`） | 约 28800 |
+
+轮询只读数据库，在线时间每分钟最多写一次。长轮询挂起期间每秒查一次数据库，等待本身不占 CPU 时间。
 
 ## 开发
 
