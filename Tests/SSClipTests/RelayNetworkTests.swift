@@ -576,9 +576,12 @@ struct RelayNetworkTests {
         let settled = context.scenario.count("poll")
         try await Task.sleep(nanoseconds: 300_000_000)
         #expect(context.scenario.count("poll") == settled)
+        // 第二次 poll 取到的消息还没确认：确认要等下一轮循环，而下一轮只会被推送信号叫醒。
+        #expect(context.controller.inbox.first?.pendingAck == true)
+        #expect(context.scenario.count("ack") == 0)
 
         channel.notify()
-        try await eventually { context.scenario.count("poll") > settled }
+        try await eventually { context.scenario.count("ack") >= 1 }
         #expect(channel.startCount == 1)
         let pollURLs = context.scenario.recordedRequests.compactMap(\.url).filter { $0.lastPathComponent == "poll" }
         #expect(pollURLs.last?.query?.contains("wait=0") == true)
