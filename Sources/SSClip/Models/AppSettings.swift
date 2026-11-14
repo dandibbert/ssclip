@@ -199,6 +199,7 @@ final class AppSettings: ObservableObject {
     @Published var hotKey: HotKeyConfiguration { didSet { persist() } }
     @Published var hotKeyValidationMessage: String?
     @Published var panelShortcuts: PanelShortcuts { didSet { persist() } }
+    @Published var automaticallyChecksForUpdates: Bool { didSet { persist() } }
 
     private let defaults: UserDefaults
     private var isLoading = true
@@ -226,6 +227,7 @@ final class AppSettings: ObservableObject {
         } else {
             panelShortcuts = PanelShortcuts()
         }
+        automaticallyChecksForUpdates = defaults.object(forKey: Keys.automaticallyChecksForUpdates) as? Bool ?? true
         isLoading = false
     }
 
@@ -254,6 +256,7 @@ final class AppSettings: ObservableObject {
         if let data = try? JSONEncoder().encode(panelShortcuts) {
             defaults.set(data, forKey: Keys.panelShortcuts)
         }
+        defaults.set(automaticallyChecksForUpdates, forKey: Keys.automaticallyChecksForUpdates)
     }
 
     private enum Keys {
@@ -267,5 +270,6 @@ final class AppSettings: ObservableObject {
         static let previewDelay = "previewDelay"
         static let hotKey = "hotKey"
         static let panelShortcuts = "panelShortcuts"
+        static let automaticallyChecksForUpdates = "automaticallyChecksForUpdates"
     }
 }

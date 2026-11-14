@@ -82,6 +82,38 @@ struct PanelKeyRouterTests {
         #expect(command(for: up) == .moveSelection(-1))
     }
 
+    @Test func commandCommaOpensSettings() throws {
+        let event = try keyEvent(keyCode: 43, characters: ",", flags: .command)
+        #expect(command(for: event) == .openSettings)
+        #expect(command(for: event, isSearching: true) == .openSettings)
+    }
+
+    @Test func commandCommaOpensSettingsWithCapsLockOnNonLatinLayout() throws {
+        let event = try keyEvent(keyCode: 43, characters: "б", flags: [.command, .capsLock])
+        #expect(command(for: event) == .openSettings)
+    }
+
+    @Test func commaWithOtherModifiersDoesNotOpenSettings() throws {
+        let plain = try keyEvent(keyCode: 43, characters: ",")
+        let shifted = try keyEvent(keyCode: 43, characters: ",", flags: [.command, .shift])
+        let option = try keyEvent(keyCode: 43, characters: ",", flags: [.command, .option])
+        #expect(command(for: plain) != .openSettings)
+        #expect(command(for: shifted) != .openSettings)
+        #expect(command(for: option) != .openSettings)
+    }
+
+    @Test func customPanelShortcutOnCommandCommaWins() throws {
+        var custom = PanelShortcuts()
+        custom.toggleFavorite = HotKeyConfiguration(
+            keyCode: 43, keyDisplayName: ",",
+            usesCommand: true, usesOption: false, usesControl: false, usesShift: false
+        )
+        let event = try keyEvent(keyCode: 43, characters: ",", flags: .command)
+        #expect(PanelKeyRouter.command(
+            for: event, isSearching: false, searchQuery: "", isComposing: false, shortcuts: custom
+        ) == .toggleFavorite)
+    }
+
     private func command(
         for event: NSEvent,
         isSearching: Bool = false,
