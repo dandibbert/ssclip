@@ -44,6 +44,22 @@ enum RelayPolicy {
             && message.created_at <= serverTime && message.expires_at > serverTime
             && message.expires_at - message.created_at <= 1_200_000
     }
+    /// 推送通道的地址：与数据接口同源，换成 wss。
+    static func streamURL(base: URL, deviceID: String) -> URL? {
+        var components = URLComponents(url: base.appendingPathComponent("api/service/stream"), resolvingAgainstBaseURL: false)
+        components?.scheme = "wss"
+        components?.queryItems = [URLQueryItem(name: "target", value: deviceID)]
+        return components?.url
+    }
+    /// 这次取到的消息是不是“一直在线时新到的”。两种情况算是：
+    /// 上一次成功的 poll 就在 10 秒内（轮询模式）；或推送通道在上一次成功的 poll 之前就已连上、
+    /// 之后没断过（推送模式，两次 poll 可以隔很久）。启动、断线重连、唤醒后的第一次都不算。
+    static func continuous(lastSuccess: Date?, started: Date, streamUpSince: Date?) -> Bool {
+        guard let lastSuccess else { return false }
+        if started.timeIntervalSince(lastSuccess) < 10 { return true }
+        guard let streamUpSince else { return false }
+        return streamUpSince <= lastSuccess
+    }
     static func mayAutoCopy(created: Double, serverTime: Double, continuous: Bool,
                             requestUnchanged: Bool, batch: Bool, latest: Bool) -> Bool {
         continuous && requestUnchanged && !batch && latest && serverTime - created >= 0 && serverTime - created <= 10_000

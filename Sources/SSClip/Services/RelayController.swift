@@ -18,6 +18,8 @@ final class RelayController: ObservableObject {
     @Published private(set) var status = "同步未启用"
     @Published private(set) var credentialWarning: String?
     @Published private(set) var isSending = false
+    /// 推送通道已连上：新消息由服务端主动通知，不再定时轮询。
+    @Published private(set) var pushConnected = false
     @Published private(set) var inbox: [RelayReceipt] = []
     var hasCredential: Bool { credentialReader(serviceURL) != nil }
     private weak var model: AppModel?
@@ -29,6 +31,10 @@ final class RelayController: ObservableObject {
     private let credentialReader: (String) -> String?
     private let credentialWriter: (String, String) -> Bool
     private let sleepNanoseconds: UInt64
+    private let pushIdleNanoseconds: UInt64
+    private let makePushChannel: (@MainActor (URLRequest) -> RelayPushChannel)?
+    private var signalPending = false
+    private var signalWaiter: CheckedContinuation<Void, Never>?
     private var receiveTask: Task<Void, Never>?
     private var sendTask: Task<Void, Never>?
     private var registrationTask: Task<Void, Never>?
@@ -44,8 +50,20 @@ final class RelayController: ObservableObject {
          session: URLSession? = nil, pasteboard: NSPasteboard = .general, credentialReader: @escaping (String) -> String? = RelayCredential.read,
          sleepNanoseconds: UInt64 = 3_000_000_000,
          credentialWriter: @escaping (String, String) -> Bool = { RelayCredential.save($0, host: $1) },
-         automaticallyConnect: Bool = true) {
+         automaticallyConnect: Bool = true,
+         pushIdleNanoseconds: UInt64 = 300_000_000_000,
+         pushChannelFactory: (@MainActor (URLRequest) -> RelayPushChannel)? = nil) {
         self.model = model
+        self.pushIdleNanoseconds = pushIdleNanoseconds
+        if let pushChannelFactory {
+            makePushChannel = pushChannelFactory
+        } else if session == nil {
+            let pushSession = URLSession(configuration: RelayPushStream.configuration(), delegate: RelayNoRedirect(), delegateQueue: nil)
+            makePushChannel = { request in RelayPushStream(request: request, session: pushSession) }
+        } else {
+            // 注入了自定义 session（测试）时不建立真实的 WebSocket。
+            makePushChannel = nil
+        }
         self.pasteboard = pasteboard
         self.credentialWriter = credentialWriter
         self.credentialReader = credentialReader
@@ -191,9 +209,12 @@ final class RelayController: ObservableObject {
     func setEnabled(_ value: Bool) {
         generation = UUID()
         receiveTask?.cancel(); receiveTask = nil
+        // 接收循环可能正等着推送信号，叫醒它让它退出。
+        signalWaiter?.resume(); signalWaiter = nil
         registrationTask?.cancel(); registrationTask = nil; isRegistering = false
         sendTask?.cancel(); sendTask = nil; isSending = false
         enabled = false
+        pushConnected = false
         defaults.set(false, forKey: "relay.v2.enabled")
         guard value else { status = "自动接收已关闭；仍可手动发送"; return }
         guard journalHealthy, isConfigured, RelayPolicy.validDeviceID(deviceID), hasCredential else {
@@ -215,10 +236,12 @@ final class RelayController: ObservableObject {
     }
 
     private enum Failure: Error { case http(Int), service(String), invalid, storage }
-    private func request(_ endpoint: String, body: [String: Any]? = nil) async throws -> Data {
+    private func request(_ endpoint: String, body: [String: Any]? = nil, immediate: Bool = false) async throws -> Data {
         guard let base = RelayPolicy.baseURL(serviceURL), let credential = credentialReader(serviceURL) else { throw Failure.invalid }
         var components = URLComponents(url: base.appendingPathComponent("api/service/" + endpoint), resolvingAgainstBaseURL: false)!
         if body == nil && (endpoint == "poll" || endpoint == "status") { components.queryItems = [URLQueryItem(name: "target", value: deviceID)] }
+        // 推送通道在线时不需要服务端把 poll 挂住等消息。
+        if immediate { components.queryItems?.append(URLQueryItem(name: "wait", value: "0")) }
         var req = URLRequest(url: components.url!)
         req.timeoutInterval = endpoint == "send" ? 30 : 12
         req.setValue("Bearer " + credential, forHTTPHeaderField: "Authorization")
@@ -250,13 +273,59 @@ final class RelayController: ObservableObject {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: journalURL.path)
     }
 
+    private func signalPollLoop() {
+        signalPending = true
+        signalWaiter?.resume()
+        signalWaiter = nil
+    }
+
+    /// 等到推送信号或超时，先到先得。
+    private func waitForSignal(upTo nanoseconds: UInt64) async {
+        if !signalPending {
+            let timeout = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: nanoseconds)
+                guard !Task.isCancelled else { return }
+                self?.signalWaiter?.resume()
+                self?.signalWaiter = nil
+            }
+            await withCheckedContinuation { continuation in
+                signalWaiter?.resume()
+                signalWaiter = continuation
+            }
+            timeout.cancel()
+        }
+        signalPending = false
+    }
+
+    private func makePushChannelForCurrentConnection() -> RelayPushChannel? {
+        guard let makePushChannel, let base = RelayPolicy.baseURL(serviceURL),
+              let credential = credentialReader(serviceURL),
+              let url = RelayPolicy.streamURL(base: base, deviceID: deviceID) else { return nil }
+        var request = URLRequest(url: url)
+        request.setValue("Bearer " + credential, forHTTPHeaderField: "Authorization")
+        return makePushChannel(request)
+    }
+
     private func pollLoop(_ current: UUID) async {
+        // 每个接收循环有自己的推送通道，循环退出时一并关闭。
+        let channel = makePushChannelForCurrentConnection()
+        channel?.onSignal = { [weak self, weak channel] in
+            guard let self, current == self.generation else { return }
+            self.pushConnected = channel?.upSince != nil
+            self.signalPollLoop()
+        }
+        channel?.start()
+        defer {
+            channel?.stop()
+            if current == generation { pushConnected = false }
+        }
         var lastSuccess: Date?
         var failures = 0
         var lastObservedChange = pasteboard.changeCount
         var lastObservedChangeAt = Date.distantPast
         while enabled && current == generation && !Task.isCancelled {
             let started = Date()
+            let streamUpSince = channel?.upSince
             let changeCount = pasteboard.changeCount
             if changeCount != lastObservedChange {
                 lastObservedChange = changeCount
@@ -273,9 +342,9 @@ final class RelayController: ObservableObject {
                         do { try persist() } catch { throw Failure.storage }
                     }
                 }
-                let response = try JSONDecoder().decode(RelayPoll.self, from: await request("poll"))
+                let response = try JSONDecoder().decode(RelayPoll.self, from: await request("poll", immediate: streamUpSince != nil))
                 guard current == generation, !Task.isCancelled else { return }
-                let continuous = lastSuccess.map { started.timeIntervalSince($0) < 10 } ?? false
+                let continuous = RelayPolicy.continuous(lastSuccess: lastSuccess, started: started, streamUpSince: streamUpSince)
                 let valid = response.messages.filter { RelayPolicy.valid($0, target: deviceID, serverTime: response.server_time) }
                 var received = 0
                 for message in valid {
@@ -317,7 +386,12 @@ final class RelayController: ObservableObject {
                 failures = min(failures + 1, 5)
                 status = "连接暂时失败，正在退避重试；恢复后的旧消息不会自动复制"
             }
-            try? await Task.sleep(nanoseconds: failures == 0 ? sleepNanoseconds : min(60_000_000_000, sleepNanoseconds * UInt64(1 << failures)))
+            if failures > 0 {
+                try? await Task.sleep(nanoseconds: min(60_000_000_000, sleepNanoseconds * UInt64(1 << failures)))
+            } else {
+                // 推送通道在线：等服务端通知，只留一个很长的兜底间隔；不在线：按原来的间隔轮询。
+                await waitForSignal(upTo: channel?.upSince != nil ? pushIdleNanoseconds : sleepNanoseconds)
+            }
         }
     }
 

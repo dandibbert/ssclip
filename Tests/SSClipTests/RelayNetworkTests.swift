@@ -561,7 +561,51 @@ struct RelayNetworkTests {
         #expect(condition(), "Expected controller state within two seconds")
     }
 
-    private func makeContext(mode: String, corruptJournal: Bool = false, configured: Bool = true, writerSucceeds: Bool = true, initialTargetID: String = testPeerID) throws -> RelayNetworkContext {
+    @Test func pushSignalTriggersPollWithoutWaitingForTheIdleInterval() async throws {
+        let channel = FakePushChannel()
+        // 轮询间隔和兜底间隔都设成一分钟：只有推送信号能让第二次 poll 在测试时间内发生。
+        let context = try makeContext(mode: "fresh", sleepNanoseconds: 60_000_000_000, pushChannel: channel)
+        defer { context.cleanUp() }
+        context.pasteboard.clearContents()
+        context.pasteboard.setString("original", forType: .string)
+        try await Task.sleep(nanoseconds: 3_100_000_000)
+        context.controller.setEnabled(true)
+        try await eventually { context.scenario.count("poll") >= 1 && context.controller.pushConnected }
+        // 通道上线本身会触发一次补拉；等这些请求结束后应当安静下来。
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let settled = context.scenario.count("poll")
+        try await Task.sleep(nanoseconds: 300_000_000)
+        #expect(context.scenario.count("poll") == settled)
+
+        channel.notify()
+        try await eventually { context.scenario.count("poll") > settled }
+        #expect(channel.startCount == 1)
+        let pollURLs = context.scenario.recordedRequests.compactMap(\.url).filter { $0.lastPathComponent == "poll" }
+        #expect(pollURLs.last?.query?.contains("wait=0") == true)
+
+        context.controller.setEnabled(false)
+        try await eventually { channel.stopCount == 1 }
+        #expect(!context.controller.pushConnected)
+    }
+
+    @Test func droppedPushStreamFallsBackToIntervalPolling() async throws {
+        let channel = FakePushChannel()
+        let context = try makeContext(mode: "fresh", pushIdleNanoseconds: 60_000_000_000, pushChannel: channel)
+        defer { context.cleanUp() }
+        context.controller.setEnabled(true)
+        try await eventually { context.controller.pushConnected }
+        channel.drop()
+        try await eventually { !context.controller.pushConnected }
+        let before = context.scenario.count("poll")
+        // 通道断开后按 10 毫秒的测试间隔继续轮询。
+        try await eventually { context.scenario.count("poll") >= before + 3 }
+        let lastPoll = context.scenario.recordedRequests.compactMap(\.url).last { $0.lastPathComponent == "poll" }
+        #expect(lastPoll?.query?.contains("wait=") == false)
+    }
+
+    private func makeContext(mode: String, corruptJournal: Bool = false, configured: Bool = true, writerSucceeds: Bool = true, initialTargetID: String = testPeerID,
+                             sleepNanoseconds: UInt64 = 10_000_000, pushIdleNanoseconds: UInt64 = 60_000_000_000,
+                             pushChannel: FakePushChannel? = nil) throws -> RelayNetworkContext {
         let suite = "SSClipRelayNetworkTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         if configured {
@@ -581,12 +625,29 @@ struct RelayNetworkTests {
         let session = URLSession(configuration: configuration)
         let scenario = RelayHTTPScenario(mode)
         RelayStubProtocol.scenario = scenario
+        var pushChannelFactory: (@MainActor (URLRequest) -> RelayPushChannel)?
+        if let pushChannel { pushChannelFactory = { _ in pushChannel } }
         let controller = RelayController(model: model, defaults: defaults, directory: directory, session: session, pasteboard: pasteboard,
-                                         credentialReader: { _ in testAPIKey }, sleepNanoseconds: 10_000_000,
-                                         credentialWriter: { _, _ in writerSucceeds }, automaticallyConnect: false)
+                                         credentialReader: { _ in testAPIKey }, sleepNanoseconds: sleepNanoseconds,
+                                         credentialWriter: { _, _ in writerSucceeds }, automaticallyConnect: false,
+                                         pushIdleNanoseconds: pushIdleNanoseconds,
+                                         pushChannelFactory: pushChannelFactory)
         return RelayNetworkContext(controller: controller, model: model, store: store, pasteboard: pasteboard,
                                    scenario: scenario, defaults: defaults, session: session, directory: directory, suite: suite)
     }
+}
+
+/// 不联网的推送通道：start 后立即“连上”，由测试决定何时通知或断开。
+@MainActor
+private final class FakePushChannel: RelayPushChannel {
+    private(set) var upSince: Date?
+    var onSignal: (() -> Void)?
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
+    func start() { startCount += 1; upSince = Date(); onSignal?() }
+    func stop() { stopCount += 1; upSince = nil }
+    func notify() { onSignal?() }
+    func drop() { upSince = nil; onSignal?() }
 }
 
 @MainActor

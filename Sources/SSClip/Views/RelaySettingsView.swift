@@ -38,6 +38,11 @@ struct RelaySettingsView: View {
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
                     .accessibilityLabel("同步状态：\(relay.status)")
+                if relay.enabled {
+                    Text(relay.pushConnected ? "实时推送已连接，不再定时轮询" : "推送通道未连接，按固定间隔轮询")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if let warning = relay.credentialWarning {
                     Text(warning).foregroundStyle(.red)
                 }

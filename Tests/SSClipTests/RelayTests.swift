@@ -63,6 +63,33 @@ struct RelayPolicyTests {
         #expect(!autoCopy(created: .nan))
     }
 
+    @Test func continuityComesFromRecentPollOrAnUninterruptedPushStream() {
+        let now = Date()
+        // 轮询模式：上一次成功在 10 秒内才算连续。
+        #expect(RelayPolicy.continuous(lastSuccess: now.addingTimeInterval(-3), started: now, streamUpSince: nil))
+        #expect(!RelayPolicy.continuous(lastSuccess: now.addingTimeInterval(-11), started: now, streamUpSince: nil))
+        #expect(!RelayPolicy.continuous(lastSuccess: nil, started: now, streamUpSince: now.addingTimeInterval(-600)))
+        // 推送模式：通道在上一次成功的 poll 之前就连上且没断过，隔多久都算连续。
+        #expect(RelayPolicy.continuous(lastSuccess: now.addingTimeInterval(-300), started: now, streamUpSince: now.addingTimeInterval(-600)))
+        // 通道在上一次 poll 之后才（重新）连上：中间断过，这次取到的算积压。
+        #expect(!RelayPolicy.continuous(lastSuccess: now.addingTimeInterval(-300), started: now, streamUpSince: now.addingTimeInterval(-5)))
+    }
+
+    @Test func pushStreamURLUsesSecureWebSocketOnTheSameOrigin() throws {
+        let base = try #require(RelayPolicy.baseURL("https://relay.example.test"))
+        let url = try #require(RelayPolicy.streamURL(base: base, deviceID: "11111111-1111-4111-8111-111111111111"))
+        #expect(url.absoluteString == "wss://relay.example.test/api/service/stream?target=11111111-1111-4111-8111-111111111111")
+    }
+
+    @MainActor @Test func pushStreamRecognizesOnlyKnownServerMessages() {
+        #expect(RelayPushStream.kind(of: .string("{\"type\":\"hello\",\"server_time\":1}")) == "hello")
+        #expect(RelayPushStream.kind(of: .string("{\"type\":\"notify\"}")) == "notify")
+        #expect(RelayPushStream.kind(of: .string("pong")) == "pong")
+        #expect(RelayPushStream.kind(of: .string("not json")) == nil)
+        #expect(RelayPushStream.kind(of: .string("[1]")) == nil)
+        #expect(RelayPushStream.kind(of: .data(Data("{\"type\":\"notify\"}".utf8))) == nil)
+    }
+
     @Test func receiptRoundTripPreservesExactTextScopeAndPendingACK() throws {
         let receipt = RelayReceipt(id: "message_123", text: "中😀\n\"quote\"\\tab\t", source: "iphone-test",
                                    receivedAt: Date(timeIntervalSince1970: 123), scope: "https://example.com|mac-mini-test", pendingAck: true)
