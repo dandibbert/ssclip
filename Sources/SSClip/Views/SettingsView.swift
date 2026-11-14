@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
@@ -164,6 +165,45 @@ struct SettingsView: View {
                         }
                         .buttonStyle(SoftButtonStyle())
                         .disabled(!settings.soundEnabled)
+                    }
+                }
+            }
+
+            SettingsSection(title: "不记录的应用") {
+                SettingsRow(verticalPadding: 9) {
+                    HStack(alignment: .center, spacing: 12) {
+                        Text("这些应用在最前面时复制的内容不会进入历史，适合密码管理器。")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer(minLength: 4)
+                        Button("添加应用…") {
+                            addExcludedApplication()
+                        }
+                        .buttonStyle(SoftButtonStyle())
+                    }
+                }
+                ForEach(settings.excludedBundleIDs, id: \.self) { bundleID in
+                    CardDivider()
+                    SettingsRow(verticalPadding: 7) {
+                        HStack(spacing: 9) {
+                            Text(excludedApplicationName(for: bundleID))
+                                .lineLimit(1)
+                            Text(bundleID)
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Spacer()
+                            Button {
+                                settings.excludedBundleIDs.removeAll { $0 == bundleID }
+                            } label: {
+                                Image(systemName: "trash")
+                                    .foregroundStyle(Theme.danger)
+                                    .frame(width: 24, height: 24)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("恢复记录 \(excludedApplicationName(for: bundleID))")
+                        }
                     }
                 }
             }
@@ -499,6 +539,29 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private func addExcludedApplication() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
+        panel.prompt = "不记录"
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls {
+            guard let bundleID = Bundle(url: url)?.bundleIdentifier,
+                  !settings.excludedBundleIDs.contains(bundleID)
+            else { continue }
+            settings.excludedBundleIDs.append(bundleID)
+        }
+    }
+
+    private func excludedApplicationName(for bundleID: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            return bundleID
+        }
+        return FileManager.default.displayName(atPath: url.path)
     }
 
     private func addFolder() {

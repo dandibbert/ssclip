@@ -27,6 +27,11 @@ final class AppModel: ObservableObject {
     private var previewController: PreviewController?
     private var previousApplication: NSRunningApplication?
     private var previewTask: Task<Void, Never>?
+    /// 非 nil 表示剪贴板上暂时不是队首（刚被 ⌘V 读走，或被面板单条粘贴占用），
+    /// 队首要等这个任务执行时才写回；这段时间里的 ⌘V 不推进队列。
+    private var pendingHeadWrite: DispatchWorkItem?
+    private var appliedSection: ClipboardSection = .all
+    private var appliedQuery = ""
     private var messageTask: Task<Void, Never>?
     private var cancellables: Set<AnyCancellable> = []
     private var acceptedHotKey: HotKeyConfiguration
@@ -51,10 +56,15 @@ final class AppModel: ObservableObject {
         monitor.onCapture = { [weak self] capture in
             self?.handleCapture(capture)
         }
-        pasteService.beforePasteboardWrite = { [weak monitor] in monitor?.suppressNextChange() }
+        pasteService.onAutomaticPasteSkipped = { [weak self] in
+            self?.showMessage("未能自动粘贴；内容已在剪贴板，可手动 ⌘V")
+        }
         pasteKeyObserver.onPaste = { [weak self] in self?.advanceQueue() }
+        pasteKeyObserver.excludedHotKey = { [weak self] in self?.acceptedHotKey }
         hotKey.onPressed = { [weak self] in self?.togglePanel() }
-        hotKey.register(settings.hotKey)
+        if !hotKey.register(settings.hotKey) {
+            settings.hotKeyValidationMessage = "呼出面板的快捷键注册失败，可能已被其他应用占用。"
+        }
 
         settings.$hotKey
             .dropFirst()
@@ -67,10 +77,16 @@ final class AppModel: ObservableObject {
                     }
                 } else {
                     self.settings.hotKeyValidationMessage = "快捷键已被其他应用占用，已恢复上一组快捷键。"
-                    if configuration != self.acceptedHotKey {
+                    self.showMessage("快捷键已被其他应用占用")
+                    guard configuration != self.acceptedHotKey else { return }
+                    // 注册新组合前旧组合已被注销，先把它注册回来。
+                    self.hotKey.register(self.acceptedHotKey)
+                    // @Published 在 willSet 阶段发布：此刻改回旧值会被外层赋值再次覆盖，
+                    // 所以等这次赋值完成后再恢复设置。
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.settings.hotKey != self.acceptedHotKey else { return }
                         self.settings.hotKey = self.acceptedHotKey
                     }
-                    self.showMessage("快捷键已被其他应用占用")
                 }
             }
             .store(in: &cancellables)
@@ -89,10 +105,9 @@ final class AppModel: ObservableObject {
         .store(in: &cancellables)
 
         Publishers.CombineLatest3(store.$items, $activeSection, $searchQuery)
-            .map { items, section, query in
-                Self.filterItems(items, section: section, query: query)
+            .sink { [weak self] items, section, query in
+                self?.applyFilter(items: items, section: section, query: query)
             }
-            .sink { [weak self] value in self?.filteredItems = value }
             .store(in: &cancellables)
 
         $searchQuery
@@ -149,10 +164,30 @@ final class AppModel: ObservableObject {
         case let .folder(folderID):
             sectionItems = items.filter { $0.folderID == folderID }
         }
-        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return sectionItems }
-        return sectionItems.filter {
-            $0.searchableText.localizedCaseInsensitiveContains(query)
+        // 多个词用空格分开，每个词都要出现（顺序不限）。
+        let terms = rawQuery.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        guard !terms.isEmpty else { return sectionItems }
+        return sectionItems.filter { item in
+            let text = item.searchableText
+            return terms.allSatisfy { text.localizedCaseInsensitiveContains($0) }
+        }
+    }
+
+    /// 面板开着时列表变化（新复制、自动清理），选中跟着原来那条记录走，
+    /// 不让同一个位置悄悄换成另一条；那条记录不在了，或面板没开，就只把页码和序号收回有效范围。
+    /// 换分区或改搜索词时不跟随，由各自的入口把选中放回第一条。
+    private func applyFilter(items: [ClipboardItem], section: ClipboardSection, query: String) {
+        let value = Self.filterItems(items, section: section, query: query)
+        let sameView = section == appliedSection && query == appliedQuery
+        appliedSection = section
+        appliedQuery = query
+        let anchorID = sameView && panelController?.isVisible == true ? selectedItem?.id : nil
+        filteredItems = value
+        if let anchorID, let index = value.firstIndex(where: { $0.id == anchorID }) {
+            currentPage = index / pageSize
+            selectedIndex = index % pageSize
+        } else {
+            normalizeNavigation()
         }
     }
 
@@ -204,7 +239,12 @@ final class AppModel: ObservableObject {
             frontmost: NSWorkspace.shared.frontmostApplication,
             ownBundleIdentifier: Bundle.main.bundleIdentifier
         )
-        normalizeNavigation()
+        // 每次呼出都从最新一条开始：上次留下的搜索、页码和选中不带到这一次。
+        isSearching = false
+        searchQuery = ""
+        currentPage = 0
+        selectedIndex = 0
+        previewTask?.cancel()
         panelController.show()
     }
 
@@ -290,6 +330,9 @@ final class AppModel: ObservableObject {
     /// 延迟是必须的：目标应用可能在按键之后才读剪贴板，立即写会粘出下一条。
     var queueAdvanceDelay: TimeInterval = 0.3
 
+    /// 面板内单条粘贴后，隔多久把队首写回剪贴板。
+    var panelPasteRestoreDelay: TimeInterval = 0.5
+
     var batchItems: [ClipboardItem] {
         batchItemIDs.compactMap { id in store.items.first(where: { $0.id == id }) }
     }
@@ -309,6 +352,7 @@ final class AppModel: ObservableObject {
             }
         } else {
             pasteKeyObserver.stop()
+            cancelPendingHeadWrite()
             batchItemIDs = []
         }
     }
@@ -333,12 +377,35 @@ final class AppModel: ObservableObject {
     }
 
     func clearBatch() {
+        cancelPendingHeadWrite()
         batchItemIDs = []
+    }
+
+    private func cancelPendingHeadWrite() {
+        pendingHeadWrite?.cancel()
+        pendingHeadWrite = nil
+    }
+
+    /// 过一会儿再把队首写上剪贴板；delay 为 0 时同步写（测试用）。
+    private func scheduleQueueHeadWrite(after delay: TimeInterval) {
+        cancelPendingHeadWrite()
+        guard delay > 0 else {
+            writeQueueHead()
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingHeadWrite = nil
+            self.writeQueueHead()
+        }
+        pendingHeadWrite = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
 
     /// 队列不变式：只要队列非空，队首内容就预写在系统剪贴板上，
     /// 因此目标应用的下一次 ⌘V 总是粘出队首。
     private func writeQueueHead() {
+        cancelPendingHeadWrite()
         guard isBatchMode else { return }
         var skippedUnreadableItem = false
         while let head = nextBatchItem {
@@ -354,18 +421,14 @@ final class AppModel: ObservableObject {
     /// 检测到一次外部 ⌘V：目标应用刚读走队首，弹出它并安排写入下一条。
     func advanceQueue() {
         guard isBatchMode, !batchItemIDs.isEmpty else { return }
+        // 队首还没写回剪贴板：这次 ⌘V 粘出的是上一条内容，不能再弹出一条没粘过的记录。
+        guard pendingHeadWrite == nil else { return }
         batchItemIDs.removeFirst()
         guard !batchItemIDs.isEmpty else {
             showMessage("批量队列已全部粘贴")
             return
         }
-        if queueAdvanceDelay <= 0 {
-            writeQueueHead()
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + queueAdvanceDelay) { [weak self] in
-                self?.writeQueueHead()
-            }
-        }
+        scheduleQueueHeadWrite(after: queueAdvanceDelay)
     }
 
     func revealInFinder(_ item: ClipboardItem) {
@@ -386,12 +449,9 @@ final class AppModel: ObservableObject {
         )
         switch result {
         case .pasted:
-            // 面板单条粘贴合成的 ⌘V 不推进队列；粘完再把队首写回剪贴板。
+            // 面板单条粘贴占用了剪贴板；粘完再把队首写回去，写回之前的 ⌘V 都不推进队列。
             if isBatchMode {
-                pasteKeyObserver.ignoreNextPaste()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                    self?.writeQueueHead()
-                }
+                scheduleQueueHeadWrite(after: panelPasteRestoreDelay)
             }
         case .copiedOnly:
             showMessage("已复制；授权辅助功能后可直接粘贴")

@@ -94,8 +94,12 @@ extension HotKeyConfiguration {
     }
 
     func matches(_ event: NSEvent) -> Bool {
-        guard UInt32(event.keyCode) == keyCode else { return false }
-        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        matches(keyCode: event.keyCode, modifierFlags: event.modifierFlags)
+    }
+
+    func matches(keyCode eventKeyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) -> Bool {
+        guard UInt32(eventKeyCode) == keyCode else { return false }
+        let flags = modifierFlags.intersection(.deviceIndependentFlagsMask)
         return flags.contains(.command) == usesCommand
             && flags.contains(.option) == usesOption
             && flags.contains(.control) == usesControl
@@ -200,6 +204,10 @@ final class AppSettings: ObservableObject {
     @Published var hotKeyValidationMessage: String?
     @Published var panelShortcuts: PanelShortcuts { didSet { persist() } }
     @Published var automaticallyChecksForUpdates: Bool { didSet { persist() } }
+    /// 来自这些应用（按 bundle identifier）的复制不记录，例如密码管理器。
+    @Published var excludedBundleIDs: [String] { didSet { persist() } }
+    /// 暂停记录只对本次运行有效，重新打开 SSClip 后恢复记录。
+    @Published var capturePaused = false
 
     private let defaults: UserDefaults
     private var isLoading = true
@@ -228,6 +236,7 @@ final class AppSettings: ObservableObject {
             panelShortcuts = PanelShortcuts()
         }
         automaticallyChecksForUpdates = defaults.object(forKey: Keys.automaticallyChecksForUpdates) as? Bool ?? true
+        excludedBundleIDs = defaults.stringArray(forKey: Keys.excludedBundleIDs) ?? []
         isLoading = false
     }
 
@@ -257,6 +266,7 @@ final class AppSettings: ObservableObject {
             defaults.set(data, forKey: Keys.panelShortcuts)
         }
         defaults.set(automaticallyChecksForUpdates, forKey: Keys.automaticallyChecksForUpdates)
+        defaults.set(excludedBundleIDs, forKey: Keys.excludedBundleIDs)
     }
 
     private enum Keys {
@@ -271,5 +281,6 @@ final class AppSettings: ObservableObject {
         static let hotKey = "hotKey"
         static let panelShortcuts = "panelShortcuts"
         static let automaticallyChecksForUpdates = "automaticallyChecksForUpdates"
+        static let excludedBundleIDs = "excludedBundleIDs"
     }
 }

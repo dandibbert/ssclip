@@ -10,6 +10,8 @@ struct CapturedClipboard: Sendable {
     let htmlData: Data?
     let imageData: Data?
     let filePaths: [String]
+    var sourceAppName: String?
+    var sourceBundleID: String?
 
     init(
         kind: ClipboardItemKind,
@@ -147,7 +149,9 @@ final class ClipboardStore: ObservableObject {
             fingerprint: fingerprint,
             byteCount: capture.imageData?.count ?? capture.text?.utf8.count ?? 0,
             isFavorite: duplicate?.isFavorite ?? false,
-            folderID: duplicate?.folderID
+            folderID: duplicate?.folderID,
+            sourceAppName: capture.sourceAppName,
+            sourceBundleID: capture.sourceBundleID
         )
         if let duplicate { removeFromList(duplicate, deleteImage: false) }
         items.insert(item, at: 0)
@@ -248,12 +252,14 @@ final class ClipboardStore: ObservableObject {
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: historyURL.path)
         } catch {
             recordStorageError("历史保存失败；本次会话仍可使用，稍后将自动重试。")
+            scheduleRetryIfPossible()
             throw error
         }
         do {
             try flushPendingImageDeletions()
         } catch {
             recordStorageError("部分图片文件无法删除；稍后将自动重试。")
+            scheduleRetryIfPossible()
             throw error
         }
         storageErrorMessage = outstandingImagePersistenceErrorMessage
@@ -308,7 +314,10 @@ final class ClipboardStore: ObservableObject {
         if let firstFailure { throw firstFailure }
     }
 
-    private func scheduleSave() {
+    /// 保存失败后隔多久自动再试一次；之后的任何改动也会照常触发保存。
+    var saveRetryDelay: TimeInterval = 30
+
+    private func scheduleSave(after delay: TimeInterval = 0.3) {
         pendingSave?.cancel()
         let work = DispatchWorkItem { [weak self] in
             do {
@@ -318,7 +327,29 @@ final class ClipboardStore: ObservableObject {
             }
         }
         pendingSave = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
+    /// 错误提示承诺“稍后将自动重试”：历史文件可写时排一次延迟重试。
+    private func scheduleRetryIfPossible() {
+        guard historyIsWritable else { return }
+        scheduleSave(after: saveRetryDelay)
+    }
+
+    /// 上次退出前没来得及删除的图片不会再被任何记录引用，启动时清掉。
+    /// 只在历史成功读入后执行，历史损坏或缺失时不动图片目录。
+    private func removeOrphanedImages() {
+        let referenced = Set(items.compactMap(\.imageFilename))
+        guard let filenames = try? FileManager.default.contentsOfDirectory(atPath: imagesDirectory.path) else {
+            return
+        }
+        for filename in filenames where !referenced.contains(filename) {
+            guard let url = ClipboardItem.safeImageURL(
+                filename: filename,
+                imagesDirectory: imagesDirectory
+            ) else { continue }
+            try? fileOperations.removeImage(url)
+        }
     }
 
     private func load() {
@@ -331,6 +362,7 @@ final class ClipboardStore: ObservableObject {
             let state = try decoder.decode(PersistedState.self, from: data)
             items = state.items
             folders = state.folders
+            removeOrphanedImages()
         } catch {
             let quarantineURL = historyURL.deletingLastPathComponent()
                 .appendingPathComponent("history.corrupt-\(Self.utcTimestamp()).json")

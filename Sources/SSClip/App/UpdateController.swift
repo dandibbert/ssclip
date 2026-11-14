@@ -96,6 +96,8 @@ final class UpdateController: ObservableObject {
 
     private func check(userInitiated: Bool) {
         guard !isBusy else { return }
+        // 已经查到的可用更新不因为后来一次检查失败而丢掉。
+        let knownUpdate = availableUpdate
         state = .checking
         Task {
             do {
@@ -111,7 +113,11 @@ final class UpdateController: ObservableObject {
                     presentAvailable(update, userInitiated: userInitiated)
                 }
             } catch {
-                state = .failed("检查更新失败：\(error.localizedDescription)")
+                if let knownUpdate {
+                    state = .available(knownUpdate)
+                } else {
+                    state = .failed("检查更新失败：\(error.localizedDescription)")
+                }
                 if userInitiated {
                     presentFailure("检查更新失败", error: error, pageURL: nil)
                 }

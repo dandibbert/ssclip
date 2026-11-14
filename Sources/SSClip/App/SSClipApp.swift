@@ -100,6 +100,10 @@ private struct MenuBarContent: View {
             model.toggleBatchMode()
         }
 
+        Button(settings.capturePaused ? "恢复记录剪贴板" : "暂停记录剪贴板") {
+            settings.capturePaused.toggle()
+        }
+
         Divider()
 
         if let storageErrorMessage = store.storageErrorMessage {
@@ -107,7 +111,9 @@ private struct MenuBarContent: View {
                 .disabled(true)
         }
 
-        Text("已保存 \(store.items.count) 条")
+        Text(settings.capturePaused
+            ? "已暂停记录 · 已保存 \(store.items.count) 条"
+            : "已保存 \(store.items.count) 条")
         Button("设置…") {
             model.showSettings()
         }

@@ -403,6 +403,9 @@ private struct ClipboardRow: View {
                 HStack(spacing: 6) {
                     Text(item.detail)
                     Text(item.createdAt.formatted(date: .abbreviated, time: .shortened))
+                    if let sourceAppName = item.sourceAppName {
+                        Text(sourceAppName)
+                    }
                     if let folderName {
                         Label(folderName, systemImage: "folder.fill")
                             .padding(.horizontal, 5)
