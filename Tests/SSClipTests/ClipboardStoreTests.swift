@@ -113,7 +113,10 @@ struct ClipboardStoreTests {
         generation = 1
         monitor.checkForChange()
         pasteboard.setString("delayed browser text", forType: .string)
-        try await Task.sleep(nanoseconds: 250_000_000)
+        // Retries run on the main actor and can lag behind a fixed sleep on a busy CI runner.
+        for _ in 0..<40 where captures.isEmpty {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
 
         #expect(captures.count == 1)
         #expect(captures.first?.kind == .text)
