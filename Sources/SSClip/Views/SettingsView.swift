@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var store: ClipboardStore
+    @EnvironmentObject private var updater: UpdateController
     @State private var folderName = ""
     @State private var tab: SettingsTab = .general
     @State private var launchAtLogin = LaunchAtLogin.isEnabled
@@ -131,6 +132,8 @@ struct SettingsView: View {
                 }
             }
 
+            updateSettings
+
             SettingsSection(title: "剪贴板变化") {
                 SettingsRow {
                     Toggle("播放提示音", isOn: $settings.soundEnabled)
@@ -219,6 +222,65 @@ struct SettingsView: View {
         }
     }
 
+    private var updateSettings: some View {
+        SettingsSection(title: "更新") {
+            SettingsRow {
+                Toggle("自动检查更新", isOn: $settings.automaticallyChecksForUpdates)
+                    .toggleStyle(.switch)
+                    .tint(Theme.controlFill)
+            }
+            CardDivider()
+            SettingsRow(verticalPadding: 9) {
+                HStack(alignment: .center, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("当前版本 \(updater.currentVersion)")
+                        Text(updateStatus)
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(isUpdateFailure ? Theme.danger : .secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 4)
+                    if let update = updater.availableUpdate {
+                        Button("更新到 \(update.version)") {
+                            updater.installAvailableUpdate()
+                        }
+                        .buttonStyle(PrimaryButtonStyle())
+                    } else {
+                        Button("检查更新") {
+                            updater.checkForUpdates()
+                        }
+                        .buttonStyle(SoftButtonStyle())
+                        .disabled(updater.isBusy)
+                    }
+                }
+            }
+        }
+    }
+
+    private var updateStatus: String {
+        switch updater.state {
+        case .checking:
+            return "正在检查…"
+        case .installing:
+            return "正在下载并安装，完成后会自动重新打开"
+        case let .available(update):
+            return "发现新版本 \(update.version)"
+        case let .failed(message):
+            return message
+        case .upToDate, .idle:
+            guard let lastChecked = updater.lastChecked else {
+                return updater.isSupported ? "从 GitHub Releases 获取更新" : "开发版本不支持自动安装"
+            }
+            let time = lastChecked.formatted(date: .abbreviated, time: .shortened)
+            return updater.state == .upToDate ? "已是最新版本（\(time) 检查）" : "上次检查：\(time)"
+        }
+    }
+
+    private var isUpdateFailure: Bool {
+        if case .failed = updater.state { return true }
+        return false
+    }
+
     private var shortcutSettings: some View {
         VStack(alignment: .leading, spacing: 15) {
             SettingsSection(title: "呼出剪贴板") {
@@ -301,7 +363,7 @@ struct SettingsView: View {
             SettingsSection(title: "系统权限") {
                 SettingsRow(verticalPadding: 10) {
                     VStack(alignment: .leading, spacing: 9) {
-                        Text("直接粘贴需要 macOS“辅助功能”权限。SSClip 不使用网络，所有历史都保存在本机。")
+                        Text("直接粘贴需要 macOS“辅助功能”权限。SSClip 只在检查更新时访问 GitHub，所有历史都保存在本机。")
                             .font(.system(size: 10.5))
                             .foregroundStyle(.secondary)
                         Button("打开辅助功能设置") {
@@ -463,7 +525,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
 
     var subtitle: String {
         switch self {
-        case .general: "剪贴板反馈、保留策略与预览"
+        case .general: "外观、更新、剪贴板反馈与保留策略"
         case .shortcut: "呼出方式与面板内操作"
         case .folder: "整理收藏内容与清理历史"
         }

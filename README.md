@@ -1,6 +1,6 @@
 # SSClip
 
-SSClip 是一个零第三方依赖的原生 macOS 剪贴板管理器，定位是精简、快速、键盘优先。它常驻菜单栏，历史与收藏只保存在本机，不包含网络请求或遥测。
+SSClip 是一个零第三方依赖的原生 macOS 剪贴板管理器，定位是精简、快速、键盘优先。它常驻菜单栏，历史与收藏只保存在本机，不包含遥测；唯一的网络请求是向 GitHub Releases 检查更新。
 
 ## 功能
 
@@ -12,6 +12,8 @@ SSClip 是一个零第三方依赖的原生 macOS 剪贴板管理器，定位是
 - `↩` 保留格式粘贴，`⇧↩` 纯文本粘贴，空格预览内容
 - 支持自定义收藏夹和顺序粘贴的批量模式
 - 可选登录时自动启动，并可按保存天数、最大条数自动清理历史
+- 应用内更新：每天自动检查一次 GitHub Releases（可在设置中关闭），也可在菜单栏或设置里手动“检查更新”；确认后自动下载、校验签名、替换并重新打开
+- 面板内和菜单栏中按 `⌘,` 打开设置
 - 尊重密码管理器的 Concealed/Transient 标记，不记录标为敏感或临时的剪贴板
 - 支持原生明暗主题、VoiceOver 标签和键盘焦点
 
@@ -45,22 +47,23 @@ open dist/SSClip.app
 
 ## GitHub Actions 构建
 
-推送到 `main`、提交 Pull Request 或推送 `v*` 标签时，GitHub Actions 会在 GitHub 托管的 macOS runner 上重新测试并构建应用，不会上传开发者本地的 `dist/`。
+推送到 `main` 或提交 Pull Request 时，GitHub Actions 会在 GitHub 托管的 macOS runner 上测试，并用 `scripts/package.sh` 打出临时签名的 DMG 和 ZIP，作为 `SSClip-macOS` Artifact 保留 14 天。这些包只用于检查，不会发布。
 
-每次成功构建都可在 [Actions](https://github.com/dandibbert/ssclip/actions) 对应运行的 Artifacts 区域下载 `SSClip-macOS`，其中包含 `SSClip-macOS.zip` 和 SHA-256 校验文件。推送版本标签（例如 `v1.0.0`）后，相同文件还会发布到 [Releases](https://github.com/dandibbert/ssclip/releases)：
+## 发布
 
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-下载后可验证 ZIP：
+正式版本由 `dandibbert/mac-build-hub` 的 `SSClip macOS build` 工作流在 M1 构建机上构建：用个人证书签名，调用同一个 `scripts/package.sh`，再把 `SSClip-<版本>.dmg`、`.zip` 和 `.sha256` 发布为本仓库的 `v<版本>` release（版本号为 `1.0.<构建序号>`）。应用内更新读取的就是最新的这个 release。
 
 ```bash
-shasum -a 256 -c SSClip-macOS.zip.sha256
+gh workflow run ssclip-macos.yml -R dandibbert/mac-build-hub -f source_sha=<完整 commit SHA>
 ```
 
-自动构建的 App 使用临时签名，没有 Developer ID 签名或 Apple 公证。首次运行可能触发 Gatekeeper；可在 Finder 中右键点击 App、选择“打开”并确认。面向普通用户的无警告正式分发仍需要 Developer ID 和 Apple 公证。
+下载后可验证：
+
+```bash
+shasum -a 256 -c SSClip-<版本>.sha256
+```
+
+App 没有 Developer ID 签名或 Apple 公证。首次运行可能触发 Gatekeeper；可在 Finder 中右键点击 App、选择“打开”并确认。之后的版本都用同一张证书签名，应用内更新只接受与当前 App 签名一致的新版本，辅助功能授权也会保留。
 
 ## 系统权限
 
@@ -72,7 +75,7 @@ shasum -a 256 -c SSClip-macOS.zip.sha256
 
 如果 `history.json` 无法解析，SSClip 会把原文件隔离为同目录下权限为 `0600` 的 `history.corrupt-*.json`，再从空历史启动。隔离文件仍可能包含完整文本、RTF/HTML、Finder 文件路径、收藏关系和时间等敏感记录；应用不会自动删除这些恢复副本，确认无需恢复后可手动删除。
 
-SSClip 没有网络请求或遥测，并会跳过带有 Concealed/Transient 标记的敏感或临时剪贴板内容。与所有剪贴板工具一样，请根据自己的安全需求评估保存历史记录的风险。
+SSClip 没有遥测，除检查和下载更新（只访问 GitHub）外不发出网络请求，并会跳过带有 Concealed/Transient 标记的敏感或临时剪贴板内容。与所有剪贴板工具一样，请根据自己的安全需求评估保存历史记录的风险。
 
 ## 项目结构
 
@@ -80,7 +83,7 @@ SSClip 没有网络请求或遥测，并会跳过带有 Concealed/Transient 标�
 Sources/SSClip/   应用源码
 Tests/SSClipTests/ 自动化测试
 Resources/        应用图标和 Info.plist
-scripts/          本地应用打包与图标工具
+scripts/          本地应用打包、发布打包与图标工具
 ```
 
 ## License

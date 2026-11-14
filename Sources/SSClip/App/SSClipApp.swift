@@ -12,6 +12,7 @@ struct SSClipApp: App {
                 .environmentObject(appDelegate.appModel)
                 .environmentObject(appDelegate.appModel.store)
                 .environmentObject(appDelegate.appModel.settings)
+                .environmentObject(appDelegate.updateController)
         } label: {
             Label {
                 Text("SSClip")
@@ -26,6 +27,7 @@ struct SSClipApp: App {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let appModel = AppModel()
+    lazy var updateController = UpdateController(settings: appModel.settings)
     private var panelController: ClipboardPanelController?
     private var settingsWindowController: SettingsWindowController?
     private var cancellables: Set<AnyCancellable> = []
@@ -53,6 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.showSettingsWindow()
         }
         appModel.start()
+        updateController.start()
         if ProcessInfo.processInfo.arguments.contains("--show-panel") {
             DispatchQueue.main.async { [weak appModel] in appModel?.showPanel() }
         }
@@ -69,7 +72,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController(
                 store: appModel.store,
-                settings: appModel.settings
+                settings: appModel.settings,
+                updateController: updateController
             )
         }
         settingsWindowController?.show()
@@ -84,6 +88,7 @@ private struct MenuBarContent: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var store: ClipboardStore
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var updater: UpdateController
 
     var body: some View {
         Button("打开剪贴板（\(settings.hotKey.displayName)）") {
@@ -105,6 +110,18 @@ private struct MenuBarContent: View {
         Text("已保存 \(store.items.count) 条")
         Button("设置…") {
             model.showSettings()
+        }
+        .keyboardShortcut(",")
+        if let update = updater.availableUpdate {
+            Button("更新到 \(update.version)…") {
+                updater.installAvailableUpdate()
+            }
+            .disabled(updater.isBusy)
+        } else {
+            Button(updater.state == .installing ? "正在安装更新…" : "检查更新…") {
+                updater.checkForUpdates()
+            }
+            .disabled(updater.isBusy)
         }
         Button("退出 SSClip") {
             NSApp.terminate(nil)
