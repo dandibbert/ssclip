@@ -1,6 +1,6 @@
 # SSClip
 
-SSClip 是一个零第三方依赖的原生 macOS 剪贴板管理器，定位是精简、快速、键盘优先。它常驻菜单栏，历史与收藏只保存在本机，不包含遥测；唯一的网络请求是向 GitHub Releases 检查更新。
+SSClip 是一个零第三方依赖的原生 macOS 剪贴板管理器，定位是精简、快速、键盘优先。它常驻菜单栏，历史与收藏只保存在本机，不包含遥测。除了向 GitHub Releases 检查更新，只有在你导入连接配置、启用默认关闭的跨设备同步后才会联网：自动接收是独立开关，仅在你操作时上传当前纯文本，可启用默认关闭的全局发送快捷键（预设 ⌃⌥⌘S）。详见 [跨设备同步的安装与限制](RELAY-TESTING.md)。
 
 ## 功能
 
@@ -82,7 +82,7 @@ App 没有 Developer ID 签名或 Apple 公证。首次运行可能触发 Gateke
 
 如果 `history.json` 无法解析，SSClip 会把原文件隔离为同目录下权限为 `0600` 的 `history.corrupt-*.json`，再从空历史启动。隔离文件仍可能包含完整文本、RTF/HTML、Finder 文件路径、收藏关系和时间等敏感记录；应用不会自动删除这些恢复副本，确认无需恢复后可手动删除。
 
-SSClip 没有遥测，除检查和下载更新（只访问 GitHub）外不发出网络请求，并会跳过带有 Concealed/Transient 标记的敏感或临时剪贴板内容。与所有剪贴板工具一样，请根据自己的安全需求评估保存历史记录的风险。
+SSClip 没有遥测，普通剪贴板监控会跳过带有 Concealed/Transient 标记的敏感或临时内容。检查和下载更新只访问 GitHub。导入同步连接配置后会进行 HTTPS 注册和设备发现，开启自动接收后保持推送连接或轮询；手动发送会上传纯文本，服务器明文暂存最多 20 分钟，并非端到端加密。本机同步收件箱、历史与收藏也是明文，凭据存于 Keychain（配对过程的历史记录风险及清理说明见 [RELAY-TESTING.md](RELAY-TESTING.md)）。与所有剪贴板工具一样，请根据自己的安全需求评估保存历史记录的风险。
 
 ## 项目结构
 
@@ -96,3 +96,10 @@ scripts/          本地应用打包、发布打包与图标工具
 ## License
 
 本项目采用 [MIT License](LICENSE)。
+
+
+### iPhone 入口
+
+在 Mac 的跨设备同步设置中点击“生成 iPhone 快捷指令”，由本人已登录 iCloud 的 Mac 官方签名，再 AirDrop 到 iPhone。只需“SSClip发送”：首次导入连接 JSON，以后每次发送选择当次 Mac；选择列表内可“更换连接配置…”。已有旧版连接自动沿用，旧“SSClip设置”可以删除。Mac 自身默认目标与全局发送快捷键不变。模板无生产密钥；云 CI 无法预签名。上一版已由用户确认 iPhone 设置成功，本轮简化流程仍待实机验证。详见 [iOS 模板说明](Shortcuts/IOS-SHORTCUT-NOTES.md) 与 [安装指南](RELAY-TESTING.md)。
+
+后续 iPhone 模板可[独立下载](https://github.com/dandibbert/ssclip/raw/refs/heads/codex/ssclip-relay-test/Shortcuts/SSClip-Send.ssclip-template)，在 Mac 点击“更新 iPhone 快捷指令…”生成安装文件，不必每次重装 Mac App。当前修复统一使用 `.txt` 缓存 JSON 内容，并兼容旧缓存文件名。

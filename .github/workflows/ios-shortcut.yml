@@ -1,0 +1,62 @@
+name: iOS Shortcut Template Validation
+on:
+  push:
+    branches: [codex/ssclip-relay-test]
+    paths:
+      - '.github/workflows/ios-shortcut.yml'
+      - 'Resources/SSClip-*.unsigned.shortcut'
+      - 'Shortcuts/**'
+      - 'scripts/audit-shortcut-registry.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validation:
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Validate unsigned template structure (not an iOS runtime test)
+        run: |
+          plutil -lint Resources/SSClip-Send.unsigned.shortcut
+          python3 Shortcuts/validate_shortcuts.py
+          python3 Shortcuts/test_persistence_actions.py
+          python3 - <<'PY'
+          import pathlib, plistlib, hashlib
+          summaries = [
+              'UNSIGNED templates: plist syntax and action envelope validated only.',
+              'Official Apple signing requires an iCloud-signed-in Mac and is performed by SSClip locally.',
+              'GitHub CI cannot prove signed installation or actual iPhone execution.',
+          ]
+          for name in ['SSClip-Send']:
+              path = pathlib.Path('Resources') / (name + '.unsigned.shortcut')
+              data = path.read_bytes()
+              value = plistlib.loads(data)
+              actions = value.get('WFWorkflowActions')
+              assert isinstance(actions, list) and len(actions) > 1, 'Expected a real workflow'
+              identifiers = []
+              for action in actions:
+                  assert isinstance(action, dict)
+                  identifier = action.get('WFWorkflowActionIdentifier')
+                  assert isinstance(identifier, str) and identifier
+                  assert isinstance(action.get('WFWorkflowActionParameters', {}), dict)
+                  identifiers.append(identifier)
+              if name == 'SSClip-Send':
+                  assert any('clipboard' in identifier.lower() for identifier in identifiers), 'Expected clipboard action'
+              summaries.append(name + ': ' + str(len(actions)) + ' actions; SHA256 ' + hashlib.sha256(data).hexdigest())
+          summary = '\n'.join(summaries)
+          pathlib.Path('shortcut-validation.txt').write_text(summary + '\n')
+          print(summary)
+          PY
+      - name: Compare actions against read-only Apple system registry
+        run: python3 scripts/audit-shortcut-registry.py
+      - name: Upload validation evidence only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ios-shortcut-validation
+          path: |
+            shortcut-validation.txt
+            shortcut-registry-audit.json
+          retention-days: 14
+          if-no-files-found: error

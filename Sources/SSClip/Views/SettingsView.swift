@@ -46,7 +46,7 @@ struct SettingsView: View {
             HStack(spacing: 7) {
                 Image(systemName: "lock.shield")
                     .foregroundStyle(Theme.accentDeep)
-                Text("数据只保存在本机")
+                Text("历史本地保存 · 同步需开启")
             }
             .font(.system(size: 9.5))
             .foregroundStyle(.secondary)
@@ -78,6 +78,8 @@ struct SettingsView: View {
                     shortcutSettings
                 case .folder:
                     folderSettings
+                case .relay:
+                    RelaySettingsView()
                 }
             }
             .padding(.horizontal, 20)
@@ -331,7 +333,10 @@ struct SettingsView: View {
                         recorder(
                             for: $settings.hotKey,
                             validate: { candidate in
-                                settings.panelShortcuts.conflicts(with: candidate)
+                                if settings.sendHotKeyEnabled && candidate.sameCombo(as: settings.sendHotKey) {
+                                    return "与全局发送快捷键冲突"
+                                }
+                                return settings.panelShortcuts.conflicts(with: candidate)
                                     ? "与面板内快捷键冲突" : nil
                             }
                         )
@@ -358,6 +363,49 @@ struct SettingsView: View {
                             .font(.system(size: 10.5))
                             .foregroundStyle(Theme.danger)
                             .accessibilityLabel("快捷键错误：\(message)")
+                    }
+                }
+            }
+
+            SettingsSection(title: "发送当前剪贴板（全局）") {
+                SettingsRow {
+                    Toggle("启用全局发送快捷键", isOn: $settings.sendHotKeyEnabled)
+                        .toggleStyle(.switch)
+                        .tint(Theme.controlFill)
+                }
+                CardDivider()
+                SettingsRow(verticalPadding: 9) {
+                    HStack {
+                        Text("发送到默认目标")
+                        Spacer()
+                        recorder(for: $settings.sendHotKey, validate: { settings.sendHotKeyConflict($0) })
+                    }
+                }
+                CardDivider()
+                SettingsRow(verticalPadding: 9) {
+                    VStack(alignment: .leading, spacing: 9) {
+                        Text("在“跨设备同步”中选择默认发送目标。无需打开窗口，也无需开启自动接收。默认关闭以避免占用其他应用快捷键；不需要新增系统权限。")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            Button("恢复预设并关闭") {
+                                settings.sendHotKeyEnabled = false
+                                settings.sendHotKey = .defaultSend
+                            }
+                            .buttonStyle(SoftButtonStyle())
+                            Spacer()
+                            Text("预设 ⌃⌥⌘S")
+                                .font(.system(size: 10.5, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if let message = settings.sendHotKeyValidationMessage {
+                    CardDivider()
+                    SettingsRow {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10.5))
+                            .foregroundStyle(Theme.danger)
                     }
                 }
             }
@@ -403,7 +451,7 @@ struct SettingsView: View {
             SettingsSection(title: "系统权限") {
                 SettingsRow(verticalPadding: 10) {
                     VStack(alignment: .leading, spacing: 9) {
-                        Text("直接粘贴需要 macOS“辅助功能”权限。SSClip 只在检查更新时访问 GitHub，所有历史都保存在本机。")
+                        Text("直接粘贴需要 macOS“辅助功能”权限。历史保存在本机；SSClip 只在检查更新时访问 GitHub，导入连接配置后才会连接同步服务端。")
                             .font(.system(size: 10.5))
                             .foregroundStyle(.secondary)
                         Button("打开辅助功能设置") {
@@ -434,6 +482,9 @@ struct SettingsView: View {
                     validate: { candidate in
                         if candidate.sameCombo(as: settings.hotKey) {
                             return "与呼出面板快捷键冲突"
+                        }
+                        if settings.sendHotKeyEnabled && candidate.sameCombo(as: settings.sendHotKey) {
+                            return "与全局发送快捷键冲突"
                         }
                         var proposed = settings.panelShortcuts
                         proposed[keyPath: keyPath] = candidate
@@ -575,6 +626,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case shortcut
     case folder
+    case relay
 
     var id: String { rawValue }
 
@@ -583,6 +635,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "通用"
         case .shortcut: "快捷键"
         case .folder: "收藏夹"
+        case .relay: "跨设备同步"
         }
     }
 
@@ -591,6 +644,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "外观、更新、剪贴板反馈与保留策略"
         case .shortcut: "呼出方式与面板内操作"
         case .folder: "整理收藏内容与清理历史"
+        case .relay: "Sites 纯文本兜底 · 实验功能"
         }
     }
 
@@ -599,6 +653,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "gearshape.fill"
         case .shortcut: "keyboard.fill"
         case .folder: "folder.fill"
+        case .relay: "arrow.triangle.2.circlepath"
         }
     }
 
@@ -607,6 +662,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: Theme.settingsGeneralIcon
         case .shortcut: Theme.settingsShortcutIcon
         case .folder: Theme.settingsFolderIcon
+        case .relay: Theme.settingsGeneralIcon
         }
     }
 }

@@ -1,0 +1,312 @@
+#define name SSClip发送
+#define inputs text
+#define color teal
+#define glyph clipboard
+#define version 17
+#include 'actions/documents'
+#include 'actions/web'
+#include 'actions/shortcuts'
+#include 'actions/text'
+#include 'actions/sharing'
+
+// Storage is intentionally the user's private iCloud Drive/Shortcuts area.
+action 'documentpicker.open' loadCanonicalState() {
+ "WFGetFilePath":"/SSClip/connection-state.txt", "WFFileErrorIfNotFound":false
+}
+// Exact legacy filenames only; startup compatibility never deletes or rewrites them.
+action 'documentpicker.open' loadLegacyAppendedState() {
+ "WFGetFilePath":"/SSClip/connection-state.json.txt", "WFFileErrorIfNotFound":false
+}
+action 'documentpicker.open' loadLegacyJSONState() {
+ "WFGetFilePath":"/SSClip/connection-state.json", "WFFileErrorIfNotFound":false
+}
+action 'documentpicker.save' saveSSClipState(variable content: 'WFInput') {
+ "WFFileStorageService":"iCloud Drive", "WFAskWhereToSave":false,
+ "WFFileDestinationPath":"SSClip/connection-state.txt", "WFSaveFileOverwrite":true
+}
+action 'file.createfolder' makeSSClipFolder() {
+ "WFFileStorageService":"iCloud Drive", "WFFilePath":"SSClip"
+}
+// No third-party action, webpage JavaScript, key-in-URL, or embedded credential.
+comment('SSClip发送：导入连接配置一次；以后每次选择一台 Mac，提交当前纯文本剪贴板。')
+@setupInput = ShortcutInput
+@stateFile = loadCanonicalState()
+@stateCount = count(@stateFile, "Items")
+if @stateCount.number < 1 {
+ @stateFile = loadLegacyAppendedState()
+ @stateCount = count(@stateFile, "Items")
+}
+if @stateCount.number < 1 {
+ @stateFile = loadLegacyJSONState()
+ @stateCount = count(@stateFile, "Items")
+}
+@needsConfig = 0
+@apiKey = ""
+@targetID = ""
+@targetName = ""
+if @setupInput.text == "SSCLIP_REIMPORT_V2" {
+ @needsConfig = 1
+}
+if @stateCount.number > 0 {
+ if @needsConfig != 1 {
+  @stateText = getText(@stateFile)
+  @state = getDictionary(@stateText)
+  @stateVersion = getValue(@state, "version")
+  if @stateVersion.number != 1 {
+   @recoveryOptions = ["重新导入连接配置", "取消"]
+   @recoveryChoice = chooseFromList(@recoveryOptions, "本机配置版本不兼容；本次未发送。")
+   if @recoveryChoice.text == "重新导入连接配置" {
+    @reimportMarker = "SSCLIP_REIMPORT_V2"
+    run("SSClip发送", @reimportMarker)
+   }
+   stop()
+  }
+  @serverValue = getValue(@state, "server_url")
+  @server = getText(@serverValue)
+  @apiKeyValue = getValue(@state, "api_key")
+  @apiKey = getText(@apiKeyValue)
+ }
+} else {
+ @needsConfig = 1
+}
+if @needsConfig == 1 {
+ confirm("请选择你在 SSClip 管理端导出的连接 JSON。首次配置只保存连接，不会发送当前剪贴板。配置会存到本人 iCloud Drive/Shortcuts/SSClip，请勿分享。", "连接 SSClip")
+ @configFile = selectFile()
+ @configText = getText(@configFile)
+ @config = getDictionary(@configText)
+ @formatValue = getValue(@config, "format")
+ @format = getText(@formatValue)
+ @version = getValue(@config, "version")
+ if !@format {
+  alert("配置缺少 format 字段。请选择管理端导出的连接 JSON，原配置未改变。", "未导入")
+  stop()
+ }
+ if @format.text != "ssclip-connection" {
+  alert("配置的 format 标记不匹配。这不是 SSClip 连接配置，原配置未改变。", "未导入")
+  stop()
+ }
+ if !@version {
+  alert("配置缺少 version 字段。请选择管理端导出的连接 JSON，原配置未改变。", "未导入")
+  stop()
+ }
+ if @version.number != 1 {
+  alert("不支持此配置版本。原配置未改变。", "未导入")
+  stop()
+ }
+ @serverValue = getValue(@config, "server_url")
+ @server = getText(@serverValue)
+ @apiKeyValue = getValue(@config, "api_key")
+ @apiKey = getText(@apiKeyValue)
+}
+// Only an explicitly confirmed HTTPS origin; never accept credentials, query, fragment or a path.
+@originMatch = matchText('\Ahttps://(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?::[1-9][0-9]{0,4})?/?\z', @server)
+if !@originMatch {
+ @recoveryOptions = ["重新导入连接配置", "取消"]
+ @recoveryChoice = chooseFromList(@recoveryOptions, "服务端不是有效 HTTPS 根地址；未联网，原配置未改。")
+ if @recoveryChoice.text == "重新导入连接配置" {
+  @reimportMarker = "SSCLIP_REIMPORT_V2"
+  run("SSClip发送", @reimportMarker)
+ }
+ stop()
+}
+@host = getURLDetail(@server, "Host")
+@hostLength = count(@host, "Characters")
+if @hostLength > 253 {
+ @recoveryOptions = ["重新导入连接配置", "取消"]
+ @recoveryChoice = chooseFromList(@recoveryOptions, "服务端主机名过长；未连接。")
+ if @recoveryChoice.text == "重新导入连接配置" {
+  @reimportMarker = "SSCLIP_REIMPORT_V2"
+  run("SSClip发送", @reimportMarker)
+ }
+ stop()
+}
+@port = getURLDetail(@server, "Port")
+if @port {
+ if @port.number > 65535 {
+  @recoveryOptions = ["重新导入连接配置", "取消"]
+  @recoveryChoice = chooseFromList(@recoveryOptions, "服务端端口无效；未连接。")
+  if @recoveryChoice.text == "重新导入连接配置" {
+   @reimportMarker = "SSCLIP_REIMPORT_V2"
+   run("SSClip发送", @reimportMarker)
+  }
+  stop()
+ }
+}
+@server = replaceText('/$', "", @server, true, true)
+@keyMatch = matchText('\A[A-Za-z0-9_-]{32,256}\z', @apiKey)
+if !@keyMatch {
+ @recoveryOptions = ["重新导入连接配置", "取消"]
+ @recoveryChoice = chooseFromList(@recoveryOptions, "API Key 格式无效；未连接。")
+ if @recoveryChoice.text == "重新导入连接配置" {
+  @reimportMarker = "SSCLIP_REIMPORT_V2"
+  run("SSClip发送", @reimportMarker)
+ }
+ stop()
+}
+if @needsConfig == 1 {
+ confirm("将连接：{@server}。会向此服务发送本机名称和文件中的 API Key。只使用你自己管理端导出的配置。Shortcuts 无法在此模板中保证拒绝 HTTP 重定向，请确保服务器由你信任和控制。", "确认连接地址")
+}
+// Shared logical sending source, not a physical iPhone identity.
+@senderID = "ios-shortcut-sender"
+@senderName = "iOS 快捷指令"
+@registerRaw = jsonRequest("{@server}/api/service/register", "POST", {"id":"{@senderID}", "name":"{@senderName}", "platform":"ios", "can_receive":false}, {"Authorization":"Bearer {@apiKey}"})
+@registered = getDictionary(@registerRaw)
+@registeredDeviceRaw = getValue(@registered, "device")
+if !@registeredDeviceRaw {
+ @recoveryOptions = ["重新导入连接配置", "取消"]
+ @recoveryChoice = chooseFromList(@recoveryOptions, "发送端注册未成功；可重新导入有效配置。未发送。")
+ if @recoveryChoice.text == "重新导入连接配置" {
+  @reimportMarker = "SSCLIP_REIMPORT_V2"
+  run("SSClip发送", @reimportMarker)
+ }
+ stop()
+}
+@registeredDevice = getDictionary(@registeredDeviceRaw)
+@registeredIDValue = getValue(@registeredDevice, "id")
+@registeredID = getText(@registeredIDValue)
+if @registeredID.text != @senderID {
+ @recoveryOptions = ["重新导入连接配置", "取消"]
+ @recoveryChoice = chooseFromList(@recoveryOptions, "发送端注册返回不匹配；原配置未改，未发送。")
+ if @recoveryChoice.text == "重新导入连接配置" {
+  @reimportMarker = "SSCLIP_REIMPORT_V2"
+  run("SSClip发送", @reimportMarker)
+ }
+ stop()
+}
+if @needsConfig == 1 {
+ @newState = {"format":"ssclip-connection","version":1,"server_url":"{@server}","api_key":"{@apiKey}"}
+ @newStateText = getText(@newState)
+ @namedStateFile = setName(@newStateText, "connection-state.txt", false)
+ makeSSClipFolder()
+ saveSSClipState(@namedStateFile)
+ // Canonical-only readback: legacy fallback must never disguise a failed new save.
+ @verifiedFile = loadCanonicalState()
+ @verifiedCount = count(@verifiedFile, "Items")
+ if @verifiedCount.number < 1 {
+  alert("保存后无法从固定路径重新读到配置，不能确认已保存。本次未发送。请只反馈文件位置和文件名，不要分享内容。", "保存校验失败")
+  stop()
+ }
+ @verifiedText = getText(@verifiedFile)
+ @verifiedState = getDictionary(@verifiedText)
+ @verifiedFormatValue = getValue(@verifiedState, "format")
+ @verifiedFormat = getText(@verifiedFormatValue)
+ @verifiedVersion = getValue(@verifiedState, "version")
+ @verifiedServerValue = getValue(@verifiedState, "server_url")
+ @verifiedServer = getText(@verifiedServerValue)
+ @verifiedKeyValue = getValue(@verifiedState, "api_key")
+ @verifiedKey = getText(@verifiedKeyValue)
+ if @verifiedFormat.text != "ssclip-connection" {
+  alert("读回的配置格式不匹配，不能确认已保存。本次未发送，不要分享配置内容。", "保存校验失败")
+  stop()
+ }
+ if @verifiedVersion.number != 1 {
+  alert("读回的配置版本不匹配，不能确认已保存。本次未发送，不要分享配置内容。", "保存校验失败")
+  stop()
+ }
+ if @verifiedServer.text != @server {
+  alert("读回的服务地址与本次设置不匹配，不能确认已保存。本次未发送，不要分享配置内容。", "保存校验失败")
+  stop()
+ }
+ if @verifiedKey.text != @apiKey {
+  alert("读回的凭据与本次设置不匹配，不能确认已保存。本次未发送，不要分享配置内容。", "保存校验失败")
+  stop()
+ }
+ alert("连接已保存", "SSClip")
+ stop()
+}
+@devicesRaw = downloadURL("{@server}/api/service/devices", {"Authorization":"Bearer {@apiKey}"})
+@deviceResponse = getDictionary(@devicesRaw)
+@devices = getValue(@deviceResponse, "devices")
+@choices = []
+@choiceMap = {}
+@choiceNameMap = {}
+for device in @devices {
+ @item = getDictionary(@device)
+ @platformValue = getValue(@item, "platform")
+ @platform = getText(@platformValue)
+ @idValue = getValue(@item, "id")
+ @id = getText(@idValue)
+ @nameValue = getValue(@item, "name")
+ @name = getText(@nameValue)
+ @eligible = 0
+ if @platform.text == "macos" { @eligible = 1 }
+ // Dictionary text is native JSON: detect explicit JSON false, not localized Boolean text.
+ @itemJSON = getText(@item)
+ @receiveDisabled = matchText('"can_receive"\s*:\s*false\s*[,}]', @itemJSON)
+ if @receiveDisabled { @eligible = 0 }
+ if @eligible == 1 {
+  if @id.text != @senderID {
+   @idMatch = matchText('\A[A-Za-z0-9_-]{8,96}\z', @id)
+   if @idMatch {
+    @label = "{@name} · {@id}"
+    @choices += @label
+    @choiceMap = setValue(@choiceMap, @label, @id)
+    @choiceNameMap = setValue(@choiceNameMap, @label, @name)
+   }
+  }
+ }
+}
+// Every run selects a fresh target; never reuse old target_id/target_name state.
+@changeConnection = "更换连接配置…"
+@choices += @changeConnection
+@choice = chooseFromList(@choices, "选择接收 Mac")
+if !@choice { stop() }
+if @choice.text == @changeConnection {
+ @reimportMarker = "SSCLIP_REIMPORT_V2"
+ run("SSClip发送", @reimportMarker)
+ stop()
+}
+@targetIDValue = getValue(@choiceMap, @choice)
+@targetID = getText(@targetIDValue)
+if !@targetID {
+ alert("未选择有效 Mac，没有发送。", "未发送")
+ stop()
+}
+@targetNameValue = getValue(@choiceNameMap, @choice)
+@targetName = getText(@targetNameValue)
+// Only now read clipboard: setup never reads it, and HTTP/file responses cannot become accidental input.
+@clipboard = getClipboard()
+@clipboardType = typeOf(@clipboard)
+@textType = matchText('^(Text|Rich Text|Rich text|文本|富文本|文字|格式化文字)$', @clipboardType)
+if !@textType {
+ alert("剪贴板不是文本（图片、文件不会读取或上传）。请复制纯文本后重试。", "未发送")
+ stop()
+}
+@text = getText(@clipboard)
+if !@text {
+ alert("剪贴板中没有纯文本。", "未发送")
+ stop()
+}
+if @text contains @apiKey {
+ alert("当前剪贴板包含 API Key，已阻止发送。", "未发送")
+ stop()
+}
+@configMarker = matchText('"format"\s*:\s*"ssclip-connection"', @text)
+if @configMarker {
+ alert("当前剪贴板疑似连接配置，已阻止发送。", "未发送")
+ stop()
+}
+// The server enforces the 32 KiB UTF-8 limit. No compiler-dependent arithmetic.
+@m1 = randomNumber(100000000,999999999)
+@m2 = randomNumber(100000000,999999999)
+@m3 = randomNumber(100000000,999999999)
+@m4 = randomNumber(100000000,999999999)
+@messageID = "msg-{@m1}-{@m2}-{@m3}-{@m4}"
+@sendRaw = jsonRequest("{@server}/api/service/send", "POST", {"id":"{@messageID}","source":"{@senderID}","target":"{@targetID}","text":"{@text}","ttl_seconds":1200}, {"Authorization":"Bearer {@apiKey}"})
+@sent = getDictionary(@sendRaw)
+@returnedIDValue = getValue(@sent, "id")
+@returnedID = getText(@returnedIDValue)
+@sendStateValue = getValue(@sent, "state")
+@sendState = getText(@sendStateValue)
+if @returnedID.text == @messageID {
+ if @sendState.text == "pending" {
+  alert("已提交 → {@targetName}", "SSClip")
+  stop()
+ }
+ if @sendState.text == "acknowledged" {
+  alert("已提交 → {@targetName}", "SSClip")
+  stop()
+ }
+}
+alert("未确认提交成功，请先检查 Mac，勿重复发送。", "SSClip")
+stop()

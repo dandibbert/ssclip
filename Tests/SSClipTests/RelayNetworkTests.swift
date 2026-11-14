@@ -1,0 +1,675 @@
+import AppKit
+import Foundation
+import Testing
+@testable import SSClip
+
+private let testDeviceID = "11111111-1111-4111-8111-111111111111"
+private let testPeerID = "22222222-2222-4222-8222-222222222222"
+private let testAPIKey = "synthetic_unit_test_api_key_1234567890"
+
+private final class RelayHTTPScenario: @unchecked Sendable {
+    private let lock = NSLock()
+    private var counts: [String: Int] = [:]
+    private var stopCount = 0
+    private var requests: [URLRequest] = []
+    private var targets: [String] = []
+    var sentTargets: [String] { lock.lock(); defer { lock.unlock() }; return targets }
+    var recordedRequests: [URLRequest] { lock.lock(); defer { lock.unlock() }; return requests }
+    private var held: RelayStubProtocol?
+    let mode: String
+    init(_ mode: String) { self.mode = mode }
+    func count(_ path: String) -> Int { lock.lock(); defer { lock.unlock() }; return counts[path, default: 0] }
+    var stops: Int { lock.lock(); defer { lock.unlock() }; return stopCount }
+    func stopped() { lock.lock(); stopCount += 1; held = nil; lock.unlock() }
+    var hasHeld: Bool { lock.lock(); defer { lock.unlock() }; return held != nil }
+    func hold(_ transport: RelayStubProtocol) { lock.lock(); held = transport; lock.unlock() }
+    func releaseFresh() {
+        lock.lock(); let transport = held; held = nil; lock.unlock()
+        transport?.respond(status: 200, data: messageData())
+    }
+    private func messageData() -> Data {
+        let now = Date().timeIntervalSince1970 * 1000
+        let text: String
+        if mode == "secretKey" { text = testAPIKey }
+        else if mode == "secretConfig" {
+            text = String(data: try! JSONSerialization.data(withJSONObject: ["format": "ssclip-connection", "version": 1, "server_url": "https://relay.example.test", "api_key": testAPIKey]), encoding: .utf8)!
+        } else { text = "network test 中😀" }
+        let payload: [String: Any] = ["server_time": now, "messages": [[
+            "id": "network_message_123", "source": testPeerID, "target": testDeviceID,
+            "text": text, "created_at": now - 100, "expires_at": now + 60_000
+        ]]]
+        return try! JSONSerialization.data(withJSONObject: payload)
+    }
+    func reply(_ request: URLRequest) -> (Int, Data)? {
+        let path = request.url!.lastPathComponent
+        lock.lock(); requests.append(request); counts[path, default: 0] += 1; let number = counts[path]!; lock.unlock()
+        if path == "send", mode == "multiDevices" {
+            var data = request.httpBody ?? Data()
+            if data.isEmpty, let stream = request.httpBodyStream {
+                stream.open(); defer { stream.close() }
+                var buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }; data.append(contentsOf: buffer.prefix(count))
+                }
+            }
+            if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let target = object["target"] as? String {
+                lock.lock(); targets.append(target); lock.unlock()
+            }
+        }
+        if mode == "unauthorized" { return (401, Data("{}".utf8)) }
+        if path == "register" {
+            if mode == "registerRetry" && number == 1 { return (500, Data("{}".utf8)) }
+            return (200, try! JSONSerialization.data(withJSONObject: ["device": ["id": testDeviceID, "name": "Test Mac", "platform": "macos", "last_seen_at": 1]]))
+        }
+        if path == "devices" {
+            let device: [String: Any] = ["id": testDeviceID, "name": "Test Mac", "platform": "macos", "last_seen_at": 1]
+            let peer: [String: Any] = ["id": testPeerID, "name": "Other device", "platform": "macos", "last_seen_at": 1]
+            let replacement: [String: Any] = ["id": "33333333-3333-4333-8333-333333333333", "name": "Different device", "platform": "macos", "last_seen_at": 1]
+            if mode == "multiDevices" {
+                let mac: [String: Any] = ["id": "another-mac-123", "name": "Same name", "platform": "macos", "last_seen_at": 1]
+                let phone: [String: Any] = ["id": "ssclip-bark-phone-1", "name": "Same name", "platform": "ios", "transport": "bark", "last_seen_at": 1]
+                let tablet: [String: Any] = ["id": "ssclip-bark-tablet-2", "name": "Same name", "platform": "ios", "transport": "bark", "last_seen_at": 1]
+                let sender: [String: Any] = ["id": "ios-shortcut-sender", "name": "iOS 快捷指令", "platform": "ios", "can_receive": false, "last_seen_at": 1]
+                let legacy: [String: Any] = ["id": "old-ios-queue-sender", "name": "Old phone sender", "platform": "ios", "last_seen_at": 1]
+                return (200, try! JSONSerialization.data(withJSONObject: ["devices": [device, peer, mac, phone, tablet, sender, legacy], "server_time": 1]))
+            }
+            return (200, try! JSONSerialization.data(withJSONObject: ["devices": [device, mode == "peerGone" ? replacement : peer], "server_time": 1]))
+        }
+        if path == "send", mode == "holdSend" { return nil }
+        if path == "send" && mode == "barkLarge" { return (413, Data("{\"error\":\"bark_text_too_large\"}".utf8)) }
+        if path == "send" && mode == "barkUnknown" { return (502, Data("{\"error\":\"bark_delivery_unknown\"}".utf8)) }
+        if path == "send" && mode == "barkSubmitted" { return (200, Data("{\"state\":\"pending\",\"delivery\":\"submitted\"}".utf8)) }
+        if path == "send" { return (200, Data("{\"state\":\"pending\"}".utf8)) }
+        if request.url?.host == "new-relay.example.test", path == "poll" {
+            return (200, Data("{\"messages\":[],\"server_time\":1}".utf8))
+        }
+        if mode == "hold" { return nil }
+        if path == "ack" {
+            return (number == 1 ? 500 : 200, Data("{}".utf8))
+        }
+        if (mode == "fresh" || mode == "holdFresh") && path == "poll" && number == 1 {
+            return (200, try! JSONSerialization.data(withJSONObject: ["server_time": Date().timeIntervalSince1970 * 1000, "messages": []]))
+        }
+        if mode == "holdFresh" && path == "poll" && number == 2 { return nil }
+        return (200, messageData())
+    }
+}
+
+private final class RelayStubProtocol: URLProtocol, @unchecked Sendable {
+    private static let lock = NSLock()
+    private static var storedScenario: RelayHTTPScenario?
+    static var scenario: RelayHTTPScenario? {
+        get { lock.lock(); defer { lock.unlock() }; return storedScenario }
+        set { lock.lock(); storedScenario = newValue; lock.unlock() }
+    }
+    override class func canInit(with request: URLRequest) -> Bool { ["relay.example.test", "new-relay.example.test"].contains(request.url?.host ?? "") }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let scenario = Self.scenario else { return }
+        guard let (status, data) = scenario.reply(request) else { scenario.hold(self); return }
+        respond(status: status, data: data)
+    }
+    func respond(status: Int, data: Data) {
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() { Self.scenario?.stopped() }
+}
+
+@Suite(.serialized)
+@MainActor
+struct RelayNetworkTests {
+    @Test func firstPollIsInboxOnlyAndFailedACKRetriesWithoutReapplyingReceipt() async throws {
+        let context = try makeContext(mode: "retry")
+        defer { context.cleanUp() }
+        context.pasteboard.clearContents()
+        context.pasteboard.setString("local text stays", forType: .string)
+        let changeCount = context.pasteboard.changeCount
+        context.controller.setEnabled(true)
+        try await eventually { context.scenario.count("ack") >= 2 && context.scenario.count("poll") >= 2 && context.controller.inbox.first?.pendingAck == false }
+        context.controller.setEnabled(false)
+        #expect(context.controller.inbox.count == 1)
+        #expect(context.controller.inbox.first?.text == "network test 中😀")
+        #expect(context.pasteboard.changeCount == changeCount)
+        #expect(context.pasteboard.string(forType: .string) == "local text stays")
+        #expect(context.store.items.isEmpty)
+        let saved = try JSONDecoder().decode([RelayReceipt].self, from: Data(contentsOf: context.directory.appendingPathComponent("relay-inbox.json")))
+        #expect(saved.count == 1)
+        #expect(saved.first?.pendingAck == false)
+    }
+
+    @Test func authenticationFailureDisablesAndDoesNotRetry() async throws {
+        let context = try makeContext(mode: "unauthorized")
+        defer { context.cleanUp() }
+        context.controller.setEnabled(true)
+        try await eventually { !context.controller.enabled && context.scenario.count("register") == 1 }
+        #expect(context.controller.status.contains("API Key"))
+        try await Task.sleep(nanoseconds: 80_000_000)
+        #expect(context.scenario.count("poll") == 0)
+        #expect(context.scenario.count("register") == 1)
+        #expect(!context.defaults.bool(forKey: "relay.v2.enabled"))
+        #expect(context.controller.inbox.isEmpty)
+    }
+
+    @Test func disablingInFlightCancelsTransportAndNeverAppliesReceipt() async throws {
+        let context = try makeContext(mode: "hold")
+        defer { context.cleanUp() }
+        context.pasteboard.clearContents()
+        context.pasteboard.setString("unchanged", forType: .string)
+        let changeCount = context.pasteboard.changeCount
+        context.controller.setEnabled(true)
+        try await eventually { context.scenario.count("poll") == 1 }
+        context.controller.setEnabled(false)
+        try await eventually { context.scenario.stops > 0 }
+        #expect(!context.controller.enabled)
+        #expect(context.controller.inbox.isEmpty)
+        #expect(context.pasteboard.changeCount == changeCount)
+        #expect(context.scenario.count("poll") == 1)
+    }
+
+    @Test func corruptJournalPreventsEnablingOrAnyNetworkRequest() async throws {
+        let context = try makeContext(mode: "retry", corruptJournal: true)
+        defer { context.cleanUp() }
+        context.controller.setEnabled(true)
+        #expect(!context.controller.enabled)
+        try await Task.sleep(nanoseconds: 40_000_000)
+        #expect(context.scenario.count("poll") == 0)
+        #expect(context.scenario.count("ack") == 0)
+        #expect(context.controller.inbox.isEmpty)
+        #expect(try String(contentsOf: context.directory.appendingPathComponent("relay-inbox.json"), encoding: .utf8) == "corrupt-journal")
+    }
+
+    @Test func freshSecondPollCopiesOnceAfterQuietPeriod() async throws {
+        let context = try makeContext(mode: "fresh")
+        defer { context.cleanUp() }
+        context.pasteboard.clearContents()
+        context.pasteboard.setString("original", forType: .string)
+        let before = context.pasteboard.changeCount
+        try await Task.sleep(nanoseconds: 3_100_000_000)
+        context.controller.setEnabled(true)
+        try await eventually { context.controller.inbox.count == 1 && context.pasteboard.string(forType: .string) == "network test 中😀" }
+        let copiedCount = context.pasteboard.changeCount
+        #expect(copiedCount > before)
+        #expect(context.store.items.count == 1)
+        #expect(context.store.items.first?.text == "network test 中😀")
+        try await eventually { context.scenario.count("poll") >= 3 }
+        #expect(context.pasteboard.changeCount == copiedCount)
+        #expect(context.controller.inbox.count == 1)
+    }
+
+    @Test func localClipboardChangeDuringFreshRequestVetoesAutoCopy() async throws {
+        let context = try makeContext(mode: "holdFresh")
+        defer { context.cleanUp() }
+        context.pasteboard.clearContents()
+        context.pasteboard.setString("original", forType: .string)
+        try await Task.sleep(nanoseconds: 3_100_000_000)
+        context.controller.setEnabled(true)
+        try await eventually { context.scenario.hasHeld && context.scenario.count("poll") == 2 }
+        context.pasteboard.clearContents()
+        context.pasteboard.setString("new local text", forType: .string)
+        let localChangeCount = context.pasteboard.changeCount
+        context.scenario.releaseFresh()
+        try await eventually { context.controller.inbox.count == 1 }
+        context.controller.setEnabled(false)
+        #expect(context.pasteboard.string(forType: .string) == "new local text")
+        #expect(context.pasteboard.changeCount == localChangeCount)
+        #expect(context.store.items.isEmpty)
+    }
+
+    @Test(arguments: ["another-mac-123", "ssclip-bark-phone-1", "ssclip-bark-tablet-2"])
+    func temporarySendRoutesByIDAcrossMacAndMultipleIOSWithoutChangingDefault(target: String) async throws {
+        let context = try makeContext(mode: "multiDevices")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 7 }
+        #expect(context.controller.targetID == testPeerID)
+        context.pasteboard.clearContents(); context.pasteboard.setString("route only this ID", forType: .string)
+        context.controller.sendCurrentClipboard(to: target)
+        try await eventually { context.scenario.count("send") == 1 && !context.controller.isSending }
+        #expect(context.scenario.sentTargets == [target])
+        #expect(context.scenario.recordedRequests.filter { $0.url?.lastPathComponent == "send" }.allSatisfy { $0.timeoutInterval == 30 })
+        #expect(context.scenario.recordedRequests.filter { $0.url?.lastPathComponent != "send" }.allSatisfy { $0.timeoutInterval == 12 })
+        #expect(context.controller.targetID == testPeerID)
+        #expect(context.defaults.string(forKey: "relay.v2.target") == testPeerID)
+        #expect(!context.controller.enabled)
+    }
+
+    @Test func optionalDefaultCanBeClearedAndInvalidTemporaryTargetDoesNotFallback() async throws {
+        let context = try makeContext(mode: "multiDevices")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 7 }
+        context.controller.selectTarget("ios-shortcut-sender")
+        context.controller.selectTarget("old-ios-queue-sender")
+        #expect(context.controller.targetID == testPeerID)
+        context.controller.selectTarget("")
+        #expect(context.controller.targetID.isEmpty)
+        #expect(context.defaults.string(forKey: "relay.v2.target") == nil)
+        context.pasteboard.clearContents(); context.pasteboard.setString("never fallback", forType: .string)
+        context.controller.sendCurrentClipboard()
+        context.controller.sendCurrentClipboard(to: "missing-device-123")
+        context.controller.sendCurrentClipboard(to: "ios-shortcut-sender")
+        context.controller.sendCurrentClipboard(to: "old-ios-queue-sender")
+        #expect(context.scenario.count("send") == 0)
+        #expect(context.controller.targetID.isEmpty)
+        context.controller.sendCurrentClipboard(to: "another-mac-123")
+        try await eventually { context.scenario.count("send") == 1 && !context.controller.isSending }
+        #expect(context.scenario.sentTargets == ["another-mac-123"])
+        #expect(context.controller.targetID.isEmpty)
+    }
+
+    @Test func legacyIOSSenderDefaultBecomesUnavailableWithoutChangingToAnotherPhone() async throws {
+        let context = try makeContext(mode: "multiDevices", initialTargetID: "old-ios-queue-sender")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 7 }
+        #expect(context.controller.targetID.isEmpty)
+        #expect(context.controller.status.contains("原默认设备已不可用"))
+        #expect(context.controller.devices.filter(\.canReceive).contains { $0.id == "ssclip-bark-phone-1" })
+        #expect(!context.controller.devices.filter(\.canReceive).contains { $0.id == "old-ios-queue-sender" || $0.id == "ios-shortcut-sender" })
+    }
+
+    @Test func sendBudgetCoversBarkWithoutExtendingPollingResourceDeadline() {
+        let send = RelayController.networkConfiguration(forSending: true)
+        let normal = RelayController.networkConfiguration(forSending: false)
+        #expect(send.timeoutIntervalForRequest == 30)
+        #expect(send.timeoutIntervalForResource == 35)
+        #expect(normal.timeoutIntervalForRequest == 12)
+        #expect(normal.timeoutIntervalForResource == 15)
+        #expect(send.httpCookieStorage == nil && send.urlCache == nil)
+        #expect(normal.httpCookieStorage == nil && normal.urlCache == nil)
+    }
+
+    @Test func receiveCapabilityDecodingKeepsLegacyMacButRejectsSendOnlyAndNonBarkIOS() throws {
+        func device(platform: String, transport: String? = nil, canReceive: Bool? = nil) throws -> RelayDevice {
+            var value: [String: Any] = ["id": "fixture-device-123", "name": "Fixture", "platform": platform, "last_seen_at": 1]
+            if let transport { value["transport"] = transport }
+            if let canReceive { value["can_receive"] = canReceive }
+            return try JSONDecoder().decode(RelayDevice.self, from: JSONSerialization.data(withJSONObject: value))
+        }
+        #expect(try device(platform: "macos").canReceive)
+        #expect(try device(platform: "web").canReceive)
+        #expect(try device(platform: "ios", transport: "bark").canReceive)
+        #expect(try !device(platform: "ios").canReceive)
+        #expect(try !device(platform: "ios", transport: "bark", canReceive: false).canReceive)
+        #expect(try !device(platform: "macos", canReceive: false).canReceive)
+    }
+
+    @Test func validImportRegistersAndDiscoversWithoutEnablingOrWritingClipboard() async throws {
+        let context = try makeContext(mode: "retry", configured: false)
+        defer { context.cleanUp() }
+        context.pasteboard.clearContents()
+        context.pasteboard.setString("local untouched", forType: .string)
+        let count = context.pasteboard.changeCount
+        #expect(context.controller.importConfiguration(data: configurationData()))
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        #expect(context.controller.isConfigured)
+        #expect(!context.controller.enabled)
+        #expect(context.controller.targetID.isEmpty)
+        context.controller.selectTarget(testPeerID)
+        #expect(context.controller.targetID == testPeerID)
+        #expect(context.scenario.count("register") == 1)
+        #expect(context.scenario.count("devices") == 1)
+        #expect(context.scenario.count("poll") == 0)
+        #expect(context.pasteboard.changeCount == count)
+        #expect(context.store.items.isEmpty)
+        #expect(context.defaults.string(forKey: "relay.v2.url") == "https://relay.example.test")
+        #expect(context.scenario.recordedRequests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == "Bearer " + testAPIKey && $0.value(forHTTPHeaderField: "OAI-Sites-Authorization") == nil })
+        #expect(!String(describing: context.defaults.dictionaryRepresentation()).contains(testAPIKey))
+    }
+
+    @Test func invalidImportAndFailedKeychainSavePreserveOldConfiguration() async throws {
+        let context = try makeContext(mode: "retry", writerSucceeds: false)
+        defer { context.cleanUp() }
+        let originalURL = context.controller.serviceURL
+        let originalTarget = context.controller.targetID
+        #expect(!context.controller.importConfiguration(data: Data("not json".utf8)))
+        #expect(!context.controller.importConfiguration(data: configurationData(url: "http://new-relay.example.test")))
+        #expect(!context.controller.importConfiguration(data: configurationData(url: "https://new-relay.example.test")))
+        #expect(context.controller.serviceURL == originalURL)
+        #expect(context.controller.targetID == originalTarget)
+        #expect(context.controller.isConfigured)
+        #expect(context.scenario.recordedRequests.isEmpty)
+        #expect(context.controller.status.contains("钥匙串"))
+    }
+
+    @Test func repeatedSameOriginImportPreservesExplicitReceivingChoiceAndTarget() async throws {
+        let context = try makeContext(mode: "retry")
+        defer { context.cleanUp() }
+        context.controller.setEnabled(true)
+        try await eventually { context.scenario.count("poll") >= 1 }
+        context.controller.selectTarget(testPeerID)
+        #expect(context.controller.importConfiguration(data: configurationData()))
+        try await eventually { !context.controller.isRegistering && context.scenario.count("register") >= 2 }
+        #expect(context.controller.enabled)
+        #expect(context.controller.targetID == testPeerID)
+        #expect(context.defaults.bool(forKey: "relay.v2.enabled"))
+    }
+
+    @Test func newOriginDoesNotInheritReceivingOrAcknowledgeOldInbox() async throws {
+        let context = try makeContext(mode: "retry")
+        defer { context.cleanUp() }
+        context.controller.setEnabled(true)
+        try await eventually { context.controller.inbox.count == 1 }
+        #expect(context.controller.importConfiguration(data: configurationData(url: "https://new-relay.example.test")))
+        #expect(context.controller.targetID.isEmpty)
+        try await eventually { !context.controller.isRegistering }
+        #expect(!context.controller.enabled)
+        #expect(context.controller.serviceURL == "https://new-relay.example.test")
+        context.controller.setEnabled(true)
+        try await eventually { context.scenario.recordedRequests.contains { $0.url?.host == "new-relay.example.test" && $0.url?.lastPathComponent == "poll" } }
+        context.controller.setEnabled(false)
+        #expect(!context.scenario.recordedRequests.contains { $0.url?.host == "new-relay.example.test" && $0.url?.lastPathComponent == "ack" })
+        #expect(context.controller.inbox.count == 1)
+    }
+
+    @Test func manualSendWorksWithAutomaticReceivingOff() async throws {
+        let context = try makeContext(mode: "retry")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && !context.controller.devices.isEmpty }
+        context.pasteboard.clearContents()
+        context.pasteboard.setString("manual upload", forType: .string)
+        context.controller.sendCurrentClipboard()
+        try await eventually { context.scenario.count("send") == 1 && !context.controller.isSending }
+        #expect(!context.controller.enabled)
+        #expect(context.scenario.count("poll") == 0)
+        #expect(context.controller.status.contains("已提交"))
+    }
+
+    @Test func deviceUUIDPersistsAcrossControllerRecreation() throws {
+        let context = try makeContext(mode: "retry")
+        defer { context.cleanUp() }
+        let oldID = context.controller.deviceID
+        context.defaults.removeObject(forKey: "relay.deviceUUID")
+        let second = RelayController(model: context.model, defaults: context.defaults, directory: context.directory,
+            session: context.session, pasteboard: context.pasteboard, credentialReader: { _ in testAPIKey }, automaticallyConnect: false)
+        #expect(UUID(uuidString: second.deviceID) != nil)
+        #expect(second.deviceID != oldID)
+        let third = RelayController(model: context.model, defaults: context.defaults, directory: context.directory,
+            session: context.session, pasteboard: context.pasteboard, credentialReader: { _ in testAPIKey }, automaticallyConnect: false)
+        #expect(third.deviceID == second.deviceID)
+        #expect(context.defaults.string(forKey: "relay.deviceUUID") == second.deviceID)
+        #expect(!second.deviceName.isEmpty)
+        #expect(context.scenario.recordedRequests.isEmpty)
+    }
+
+    @Test func legacyLoginConfigurationRequiresNewImportAndNeverConnects() throws {
+        let context = try makeContext(mode: "retry", configured: false)
+        defer { context.cleanUp() }
+        context.defaults.set("https://legacy.example.test", forKey: "relay.url")
+        context.defaults.set(true, forKey: "relay.enabled")
+        let migrated = RelayController(model: context.model, defaults: context.defaults, directory: context.directory,
+            session: context.session, pasteboard: context.pasteboard, credentialReader: { _ in testAPIKey })
+        #expect(!migrated.isConfigured)
+        #expect(!migrated.enabled)
+        #expect(migrated.serviceURL.isEmpty)
+        #expect(migrated.status.contains("旧测试连接"))
+        #expect(context.scenario.recordedRequests.isEmpty)
+    }
+
+    @Test func registrationRetriesTemporaryFailureWithoutDiscardingReceivingPreference() async throws {
+        let context = try makeContext(mode: "registerRetry")
+        defer { context.cleanUp() }
+        context.controller.setEnabled(true)
+        try await eventually { context.scenario.count("register") >= 2 && context.scenario.count("poll") >= 1 }
+        #expect(context.controller.enabled)
+        #expect(context.defaults.bool(forKey: "relay.v2.enabled"))
+        #expect(context.controller.devices.count == 2)
+    }
+
+    @Test(arguments: ["secretKey", "secretConfig"])
+    func remoteConnectionSecretsAreRedactedBeforePersistenceAndACK(mode: String) async throws {
+        let context = try makeContext(mode: mode)
+        defer { context.cleanUp() }
+        context.pasteboard.clearContents()
+        context.pasteboard.setString("keep local", forType: .string)
+        let before = context.pasteboard.changeCount
+        context.controller.setEnabled(true)
+        try await eventually { context.controller.inbox.count == 1 && context.controller.inbox.first?.pendingAck == false }
+        context.controller.setEnabled(false)
+        #expect(context.controller.inbox.first?.hidden == true)
+        #expect(context.controller.inbox.first?.text == "")
+        #expect(context.store.items.isEmpty)
+        #expect(context.pasteboard.changeCount == before)
+        let disk = try String(contentsOf: context.directory.appendingPathComponent("relay-inbox.json"), encoding: .utf8)
+        #expect(!disk.contains(testAPIKey))
+        #expect(!disk.contains("ssclip-connection"))
+        #expect(context.scenario.count("ack") >= 1)
+    }
+
+    @Test func missingDefaultTargetNeverFallsBackToAnotherDiscoveredDevice() async throws {
+        let context = try makeContext(mode: "peerGone")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        #expect(context.controller.targetID.isEmpty)
+        #expect(context.defaults.string(forKey: "relay.v2.target") == "")
+        var feedback = ""
+        context.controller.onSendFeedback = { feedback = $0 }
+        context.pasteboard.clearContents(); context.pasteboard.setString("do not misroute", forType: .string)
+        context.controller.sendCurrentClipboard()
+        #expect(context.scenario.count("send") == 0)
+        #expect(feedback.contains("默认发送目标"))
+    }
+
+    @Test func unconfiguredSendReportsReasonAndMakesNoRequest() throws {
+        let context = try makeContext(mode: "retry", configured: false)
+        defer { context.cleanUp() }
+        var feedback = ""
+        context.controller.onSendFeedback = { feedback = $0 }
+        context.controller.sendCurrentClipboard()
+        #expect(feedback.contains("导入连接配置"))
+        #expect(context.scenario.recordedRequests.isEmpty)
+    }
+
+    @Test func emptyClipboardReportsReasonWithoutSending() async throws {
+        let context = try makeContext(mode: "retry")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        context.pasteboard.clearContents()
+        var feedback = ""
+        context.controller.onSendFeedback = { feedback = $0 }
+        context.controller.sendCurrentClipboard()
+        #expect(feedback.contains("没有纯文本"))
+        #expect(context.scenario.count("send") == 0)
+    }
+
+    @Test func sendingKnownKeyOrConfigurationIsBlockedWithoutLeakingItInFeedback() async throws {
+        let context = try makeContext(mode: "retry")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        var feedback: [String] = []
+        context.controller.onSendFeedback = { feedback.append($0) }
+        for text in [testAPIKey, String(data: configurationData(), encoding: .utf8)!] {
+            context.pasteboard.clearContents(); context.pasteboard.setString(text, forType: .string)
+            context.controller.sendCurrentClipboard()
+            #expect(context.controller.status.contains("已阻止"))
+        }
+        #expect(context.scenario.count("send") == 0)
+        #expect(feedback.allSatisfy { !$0.contains(testAPIKey) && !$0.contains("ssclip-connection") })
+    }
+
+    @Test func rapidRepeatedSendAfterCompletionUploadsOnlyOnce() async throws {
+        let context = try makeContext(mode: "retry")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        context.pasteboard.clearContents(); context.pasteboard.setString("one intentional upload", forType: .string)
+        var feedback: [String] = []
+        context.controller.onSendFeedback = { feedback.append($0) }
+        context.controller.sendCurrentClipboard()
+        try await eventually { context.scenario.count("send") == 1 && !context.controller.isSending }
+        #expect(feedback.contains { $0.contains("已提交") && $0.contains("Other device") && !$0.contains("不代表") })
+        context.controller.sendCurrentClipboard()
+        #expect(context.controller.status.contains("重复发送"))
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(context.scenario.count("send") == 1)
+        #expect(!context.controller.enabled)
+    }
+
+    @Test func repeatedSendWhileRequestInFlightUploadsOnlyOnce() async throws {
+        let context = try makeContext(mode: "holdSend")
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        context.pasteboard.clearContents(); context.pasteboard.setString("one in flight", forType: .string)
+        context.controller.sendCurrentClipboard()
+        try await eventually { context.scenario.count("send") == 1 }
+        context.controller.sendCurrentClipboard()
+        #expect(context.controller.status.contains("上一条"))
+        try await Task.sleep(nanoseconds: 30_000_000)
+        #expect(context.scenario.count("send") == 1)
+    }
+
+    private func configurationData(url: String = "https://relay.example.test") -> Data {
+        try! JSONSerialization.data(withJSONObject: ["format": "ssclip-connection", "version": 1, "server_url": url, "api_key": testAPIKey])
+    }
+
+    @Test(arguments: ["barkLarge", "barkUnknown", "barkSubmitted"])
+    func barkHTTPResultsUseSafeSpecificFeedback(_ mode: String) async throws {
+        let context = try makeContext(mode: mode)
+        defer { context.cleanUp() }
+        context.controller.refreshDevices()
+        try await eventually { !context.controller.isRegistering && context.controller.devices.count == 2 }
+        context.controller.selectTarget(testPeerID)
+        context.pasteboard.clearContents()
+        context.pasteboard.setString("ordinary text", forType: .string)
+        context.controller.sendCurrentClipboard()
+        try await eventually { context.scenario.count("send") == 1 && !context.controller.isSending }
+        if mode == "barkLarge" { #expect(context.controller.status.contains("未截断")) }
+        if mode == "barkUnknown" { #expect(context.controller.status.contains("先检查 iPhone")) }
+        if mode == "barkSubmitted" {
+            #expect(context.controller.status.contains("Bark 已接受"))
+            #expect(!context.controller.status.contains("不代表"))
+            #expect(!context.controller.status.contains("已复制"))
+        }
+        #expect(!context.controller.status.contains("ordinary text"))
+        #expect(!context.controller.status.contains(testAPIKey))
+    }
+
+    private func eventually(_ condition: () -> Bool) async throws {
+        for _ in 0..<200 {
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(condition(), "Expected controller state within two seconds")
+    }
+
+    @Test func pushSignalTriggersPollWithoutWaitingForTheIdleInterval() async throws {
+        let channel = FakePushChannel()
+        // 轮询间隔和兜底间隔都设成一分钟：只有推送信号能让第二次 poll 在测试时间内发生。
+        let context = try makeContext(mode: "fresh", sleepNanoseconds: 60_000_000_000, pushChannel: channel)
+        defer { context.cleanUp() }
+        context.pasteboard.clearContents()
+        context.pasteboard.setString("original", forType: .string)
+        try await Task.sleep(nanoseconds: 3_100_000_000)
+        context.controller.setEnabled(true)
+        try await eventually { context.scenario.count("poll") >= 1 && context.controller.pushConnected }
+        // 通道上线本身会触发一次补拉；等这些请求结束后应当安静下来。
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let settled = context.scenario.count("poll")
+        try await Task.sleep(nanoseconds: 300_000_000)
+        #expect(context.scenario.count("poll") == settled)
+        // 第二次 poll 取到的消息还没确认：确认要等下一轮循环，而下一轮只会被推送信号叫醒。
+        #expect(context.controller.inbox.first?.pendingAck == true)
+        #expect(context.scenario.count("ack") == 0)
+
+        channel.notify()
+        try await eventually { context.scenario.count("ack") >= 1 }
+        #expect(channel.startCount == 1)
+        let pollURLs = context.scenario.recordedRequests.compactMap(\.url).filter { $0.lastPathComponent == "poll" }
+        #expect(pollURLs.last?.query?.contains("wait=0") == true)
+
+        context.controller.setEnabled(false)
+        try await eventually { channel.stopCount == 1 }
+        #expect(!context.controller.pushConnected)
+    }
+
+    @Test func droppedPushStreamFallsBackToIntervalPolling() async throws {
+        let channel = FakePushChannel()
+        let context = try makeContext(mode: "fresh", pushIdleNanoseconds: 60_000_000_000, pushChannel: channel)
+        defer { context.cleanUp() }
+        context.controller.setEnabled(true)
+        try await eventually { context.controller.pushConnected }
+        channel.drop()
+        try await eventually { !context.controller.pushConnected }
+        let before = context.scenario.count("poll")
+        // 通道断开后按 10 毫秒的测试间隔继续轮询。
+        try await eventually { context.scenario.count("poll") >= before + 3 }
+        let lastPoll = context.scenario.recordedRequests.compactMap(\.url).last { $0.lastPathComponent == "poll" }
+        #expect(lastPoll?.query?.contains("wait=") == false)
+    }
+
+    private func makeContext(mode: String, corruptJournal: Bool = false, configured: Bool = true, writerSucceeds: Bool = true, initialTargetID: String = testPeerID,
+                             sleepNanoseconds: UInt64 = 10_000_000, pushIdleNanoseconds: UInt64 = 60_000_000_000,
+                             pushChannel: FakePushChannel? = nil) throws -> RelayNetworkContext {
+        let suite = "SSClipRelayNetworkTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        if configured {
+            defaults.set("https://relay.example.test", forKey: "relay.v2.url")
+            defaults.set(1, forKey: "relay.connectionVersion")
+        }
+        defaults.set(testDeviceID, forKey: "relay.deviceUUID")
+        defaults.set(initialTargetID, forKey: "relay.v2.target")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(suite, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if corruptJournal { try Data("corrupt-journal".utf8).write(to: directory.appendingPathComponent("relay-inbox.json")) }
+        let pasteboard = NSPasteboard(name: NSPasteboard.Name(suite))
+        let store = ClipboardStore(baseDirectory: directory)
+        let model = AppModel(settings: AppSettings(defaults: defaults), store: store, pasteService: PasteService(pasteboard: pasteboard))
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RelayStubProtocol.self]
+        let session = URLSession(configuration: configuration)
+        let scenario = RelayHTTPScenario(mode)
+        RelayStubProtocol.scenario = scenario
+        var pushChannelFactory: (@MainActor (URLRequest) -> RelayPushChannel)?
+        if let pushChannel { pushChannelFactory = { _ in pushChannel } }
+        let controller = RelayController(model: model, defaults: defaults, directory: directory, session: session, pasteboard: pasteboard,
+                                         credentialReader: { _ in testAPIKey }, sleepNanoseconds: sleepNanoseconds,
+                                         credentialWriter: { _, _ in writerSucceeds }, automaticallyConnect: false,
+                                         pushIdleNanoseconds: pushIdleNanoseconds,
+                                         pushChannelFactory: pushChannelFactory)
+        return RelayNetworkContext(controller: controller, model: model, store: store, pasteboard: pasteboard,
+                                   scenario: scenario, defaults: defaults, session: session, directory: directory, suite: suite)
+    }
+}
+
+/// 不联网的推送通道：start 后立即“连上”，由测试决定何时通知或断开。
+@MainActor
+private final class FakePushChannel: RelayPushChannel {
+    private(set) var upSince: Date?
+    var onSignal: (() -> Void)?
+    private(set) var startCount = 0
+    private(set) var stopCount = 0
+    func start() { startCount += 1; upSince = Date(); onSignal?() }
+    func stop() { stopCount += 1; upSince = nil }
+    func notify() { onSignal?() }
+    func drop() { upSince = nil; onSignal?() }
+}
+
+@MainActor
+private struct RelayNetworkContext {
+    let controller: RelayController
+    let model: AppModel // retain: controller's reference is weak
+    let store: ClipboardStore
+    let pasteboard: NSPasteboard
+    let scenario: RelayHTTPScenario
+    let defaults: UserDefaults
+    let session: URLSession
+    let directory: URL
+    let suite: String
+    func cleanUp() {
+        controller.setEnabled(false)
+        session.invalidateAndCancel()
+        RelayStubProtocol.scenario = nil
+        pasteboard.releaseGlobally()
+        defaults.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: directory)
+    }
+}

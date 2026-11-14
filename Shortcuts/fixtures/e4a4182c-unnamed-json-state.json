@@ -1,0 +1,60 @@
+{
+  "source_commit": "e4a4182cf3d1938cedcacc93860ecd43799dceec",
+  "source_resource_sha256": "921166843c56bd0f5771cd3099d817b6cb59ab5a002835fbb712acd0749789c0",
+  "scope": "Exact file-action extraction; no user data. Text-extension policy modeled separately, not inferred from parameter names.",
+  "loader": {
+    "WFWorkflowActionIdentifier": "is.workflow.actions.documentpicker.open",
+    "WFWorkflowActionParameters": {
+      "CustomOutputName": "LoadSSClipState",
+      "UUID": "e616d904-0f87-4ab9-a332-ffabf8e0ea24",
+      "WFFileErrorIfNotFound": false,
+      "WFGetFilePath": "/SSClip/connection-state.json"
+    }
+  },
+  "text_conversion": {
+    "WFWorkflowActionIdentifier": "is.workflow.actions.detect.text",
+    "WFWorkflowActionParameters": {
+      "CustomOutputName": "GetText 8",
+      "UUID": "c6eaa6f0-d2c0-4323-96f1-f209ccb3f0da",
+      "WFInput": {
+        "Value": {
+          "Type": "Variable",
+          "VariableName": "newState"
+        },
+        "WFSerializationType": "WFTextTokenAttachment"
+      }
+    }
+  },
+  "text_binding": {
+    "WFWorkflowActionIdentifier": "is.workflow.actions.setvariable",
+    "WFWorkflowActionParameters": {
+      "WFInput": {
+        "Value": {
+          "OutputName": "GetText 8",
+          "OutputUUID": "c6eaa6f0-d2c0-4323-96f1-f209ccb3f0da",
+          "Type": "ActionOutput"
+        },
+        "WFSerializationType": "WFTextTokenAttachment"
+      },
+      "WFSerializationType": "WFTextTokenAttachment",
+      "WFVariableName": "newStateText"
+    }
+  },
+  "save": {
+    "WFWorkflowActionIdentifier": "is.workflow.actions.documentpicker.save",
+    "WFWorkflowActionParameters": {
+      "WFAskWhereToSave": false,
+      "WFFileDestinationPath": "SSClip/connection-state.json",
+      "WFFileStorageService": "iCloud Drive",
+      "WFInput": {
+        "Value": {
+          "Type": "Variable",
+          "VariableName": "newStateText"
+        },
+        "WFSerializationType": "WFTextTokenAttachment"
+      },
+      "WFSaveFileOverwrite": true
+    }
+  },
+  "set_name_action_count": 0
+}

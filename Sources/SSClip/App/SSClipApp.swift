@@ -73,7 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             settingsWindowController = SettingsWindowController(
                 store: appModel.store,
                 settings: appModel.settings,
-                updateController: updateController
+                updateController: updateController,
+                relay: appModel.relay
             )
         }
         settingsWindowController?.show()
@@ -111,6 +112,9 @@ private struct MenuBarContent: View {
                 .disabled(true)
         }
 
+        RelayMenuContent(relay: model.relay)
+        Divider()
+
         Text(settings.capturePaused
             ? "已暂停记录 · 已保存 \(store.items.count) 条"
             : "已保存 \(store.items.count) 条")
@@ -133,5 +137,29 @@ private struct MenuBarContent: View {
             NSApp.terminate(nil)
         }
         .keyboardShortcut("q")
+    }
+}
+
+private struct RelayMenuContent: View {
+    @ObservedObject var relay: RelayController
+    @EnvironmentObject private var settings: AppSettings
+
+    var body: some View {
+        Button("发送当前纯文本 → \(destinationName)  \(shortcutLabel)") {
+            relay.sendCurrentClipboard()
+        }
+        .disabled(!relay.isConfigured || relay.isSending || relay.isRegistering || !relay.devices.contains(where: { $0.id == relay.targetID && $0.id != relay.deviceID && $0.canReceive }))
+        Text(relay.status)
+            .font(.caption)
+    }
+
+    private var shortcutLabel: String {
+        settings.sendHotKeyEnabled ? "（\(settings.sendHotKey.displayName)）" : "（快捷键未开启）"
+    }
+
+    private var destinationName: String {
+        guard let target = relay.devices.first(where: { $0.id == relay.targetID && $0.canReceive }) else { return "未选择默认目标" }
+        let duplicates = relay.devices.filter { $0.name == target.name }.count > 1
+        return duplicates ? "\(target.name) · \(target.id)" : target.name
     }
 }

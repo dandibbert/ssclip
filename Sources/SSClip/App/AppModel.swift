@@ -14,6 +14,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var isBatchMode = false
     @Published private(set) var batchItemIDs: [UUID] = []
 
+    private(set) var lastClipboardActivity = Date()
+
     let settings: AppSettings
     let store: ClipboardStore
     let monitor: ClipboardMonitor
@@ -22,6 +24,11 @@ final class AppModel: ObservableObject {
     var panelProvider: (() -> ClipboardPanelController?)?
     var settingsPresenter: (() -> Void)?
     private let hotKey = GlobalHotKey()
+    private let sendHotKey = GlobalHotKey()
+    private lazy var sendShortcutBinding = SendShortcutBinding(settings: settings,
+        register: { [weak self] in self?.sendHotKey.register($0) ?? false },
+        unregister: { [weak self] in self?.sendHotKey.unregister() })
+    private lazy var relayFeedback = RelayFeedbackController()
     private let pasteService: PasteService
     private let pasteKeyObserver = PasteKeyObserver()
     private var previewController: PreviewController?
@@ -35,6 +42,34 @@ final class AppModel: ObservableObject {
     private var messageTask: Task<Void, Never>?
     private var cancellables: Set<AnyCancellable> = []
     private var acceptedHotKey: HotKeyConfiguration
+
+    lazy var relay: RelayController = {
+        let controller = RelayController(model: self)
+        controller.onSendFeedback = { [weak self] message in self?.relayFeedback.show(message) }
+        return controller
+    }()
+
+    static var isRecordingShortcut: Bool {
+        guard let app = NSApp else { return false }
+        return app.windows.contains { $0.isVisible && ($0.firstResponder as? HotKeyRecorderButton)?.isRecording == true }
+    }
+
+    @discardableResult
+    func removeRelayCredentialsFromHistory() -> Bool {
+        let matches = store.items.filter { $0.text.map(RelayCredential.isCredential) == true }
+        guard !matches.isEmpty else { return true }
+        for item in matches { store.remove(item) }
+        do { try store.saveImmediately(); return true } catch { return false }
+    }
+
+    /// Relay never enters the batch capture path or synthesizes a paste.
+    func receiveRelayText(_ text: String) -> Bool {
+        guard !isBatchMode, RelayPolicy.validText(text), !RelayCredential.isCredential(text) else { return false }
+        let capture = CapturedClipboard(kind: .text, title: String(text.prefix(160)).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "同步文本" : String(text.prefix(160)), text: text, imageData: nil, filePaths: [])
+        guard let item = store.add(capture) else { return false }
+        store.applyRetention(cutoff: settings.retentionCutoff, maximumItems: settings.itemLimit)
+        return pasteService.write(item, imagesDirectory: store.imagesDirectory, mode: .plainText)
+    }
 
     let pageSize = 10
 
@@ -59,17 +94,41 @@ final class AppModel: ObservableObject {
         pasteService.onAutomaticPasteSkipped = { [weak self] in
             self?.showMessage("未能自动粘贴；内容已在剪贴板，可手动 ⌘V")
         }
+        // 自己写剪贴板也算本机剪贴板活动：同步收到的文本不会紧跟着覆盖它。
+        pasteService.onPasteboardWrite = { [weak self] in
+            self?.lastClipboardActivity = Date()
+        }
         pasteKeyObserver.onPaste = { [weak self] in self?.advanceQueue() }
         pasteKeyObserver.excludedHotKey = { [weak self] in self?.acceptedHotKey }
         hotKey.onPressed = { [weak self] in self?.togglePanel() }
         if !hotKey.register(settings.hotKey) {
             settings.hotKeyValidationMessage = "呼出面板的快捷键注册失败，可能已被其他应用占用。"
         }
+        sendHotKey.shouldTrigger = { [weak self] in
+            guard let self else { return false }
+            return self.settings.sendHotKeyEnabled && self.settings.sendHotKeyConflict(self.settings.sendHotKey) == nil && !Self.isRecordingShortcut
+        }
+        sendHotKey.onPressed = { [weak self] in
+            guard let self, self.settings.sendHotKeyEnabled, !Self.isRecordingShortcut else { return }
+            self.relay.sendCurrentClipboard()
+        }
+        Publishers.CombineLatest3(settings.$sendHotKey, settings.$sendHotKeyEnabled, settings.$panelShortcuts)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _, _, _ in self?.sendShortcutBinding.refresh() }
+            .store(in: &cancellables)
 
         settings.$hotKey
             .dropFirst()
             .sink { [weak self] configuration in
                 guard let self else { return }
+                if self.settings.sendHotKeyEnabled && configuration.sameCombo(as: self.settings.sendHotKey) {
+                    self.settings.hotKeyValidationMessage = "与已启用的发送快捷键冲突；已保留原呼出快捷键"
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.settings.hotKey == configuration else { return }
+                        self.settings.hotKey = self.acceptedHotKey
+                    }
+                    return
+                }
                 if self.hotKey.register(configuration) {
                     if configuration != self.acceptedHotKey {
                         self.acceptedHotKey = configuration
@@ -79,8 +138,7 @@ final class AppModel: ObservableObject {
                     self.settings.hotKeyValidationMessage = "快捷键已被其他应用占用，已恢复上一组快捷键。"
                     self.showMessage("快捷键已被其他应用占用")
                     guard configuration != self.acceptedHotKey else { return }
-                    // 注册新组合前旧组合已被注销，先把它注册回来。
-                    self.hotKey.register(self.acceptedHotKey)
+                    // 注册失败时 GlobalHotKey 保留原来的绑定，这里只需要把设置改回去。
                     // @Published 在 willSet 阶段发布：此刻改回旧值会被外层赋值再次覆盖，
                     // 所以等这次赋值完成后再恢复设置。
                     DispatchQueue.main.async { [weak self] in
@@ -136,6 +194,11 @@ final class AppModel: ObservableObject {
     }
 
     func handleCapture(_ capture: CapturedClipboard) {
+        lastClipboardActivity = Date()
+        if let text = capture.text, RelayCredential.isCredential(text) {
+            if isBatchMode { writeQueueHead() }
+            return
+        }
         let added = store.add(capture)
         if isBatchMode, let added {
             batchItemIDs.append(added.id)
@@ -209,6 +272,8 @@ final class AppModel: ObservableObject {
     }
 
     func start() {
+        sendShortcutBinding.refresh()
+        _ = relay
         store.applyRetention(cutoff: settings.retentionCutoff, maximumItems: settings.itemLimit)
         monitor.start()
     }

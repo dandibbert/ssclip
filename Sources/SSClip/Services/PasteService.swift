@@ -43,6 +43,8 @@ final class PasteService {
 
     /// 已经安排好的自动粘贴最后没有发出（目标应用退出或失去焦点）时调用；内容仍留在剪贴板上。
     var onAutomaticPasteSkipped: (() -> Void)?
+    /// 每次成功写入剪贴板后调用。
+    var onPasteboardWrite: (() -> Void)?
 
     private let pasteboard: NSPasteboard
     private let environment: Environment
@@ -105,6 +107,7 @@ final class PasteService {
         // 给自己的写入打上标记，ClipboardMonitor 读到后跳过，不会把它当成一次新的复制。
         pasteboard.addTypes([.ssclipOwnWrite], owner: nil)
         pasteboard.setString("1", forType: .ssclipOwnWrite)
+        onPasteboardWrite?()
         return true
     }
 

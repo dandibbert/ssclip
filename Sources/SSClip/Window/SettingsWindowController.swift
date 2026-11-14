@@ -5,11 +5,12 @@ import SwiftUI
 final class SettingsWindowController {
     private let window: NSWindow
 
-    init(store: ClipboardStore, settings: AppSettings, updateController: UpdateController) {
+    init(store: ClipboardStore, settings: AppSettings, updateController: UpdateController, relay: RelayController) {
         let contentView = SettingsView()
             .environmentObject(store)
             .environmentObject(settings)
             .environmentObject(updateController)
+            .environmentObject(relay)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 580, height: 446),
             styleMask: [.titled, .closable, .miniaturizable],
