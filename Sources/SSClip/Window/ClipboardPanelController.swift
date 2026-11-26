@@ -10,6 +10,7 @@ final class ClipboardPanel: NSPanel {
 final class ClipboardPanelController: NSObject, NSWindowDelegate {
     private let panel: ClipboardPanel
     private unowned let model: AppModel
+    private let dragCoordinator = ClipboardPanelDragCoordinator()
     private var keyEventMonitor: Any?
     private var outsideClickMonitor: Any?
     private var isHiding = false
@@ -26,6 +27,18 @@ final class ClipboardPanelController: NSObject, NSWindowDelegate {
             defer: true
         )
         super.init()
+        dragCoordinator.onDragWillBegin = { [weak model] in
+            model?.cancelPreviewForDrag()
+        }
+        dragCoordinator.onDragDidEnd = { [weak self, weak model] succeeded, shouldHidePanel in
+            guard let self else { return }
+            if succeeded || shouldHidePanel || !self.panel.isKeyWindow {
+                model?.hidePanel()
+            }
+        }
+        dragCoordinator.onExportFailed = { [weak model] in
+            model?.notifyDragExportFailed()
+        }
         panel.delegate = self
         panel.isReleasedWhenClosed = false
         panel.level = .statusBar
@@ -37,7 +50,7 @@ final class ClipboardPanelController: NSObject, NSWindowDelegate {
         // 不指定初始焦点，避免呼出时第一个可聚焦控件（搜索按钮）带上焦点环。
         panel.initialFirstResponder = nil
         panel.contentView = NSHostingView(
-            rootView: ClipboardPanelView()
+            rootView: ClipboardPanelView(dragCoordinator: dragCoordinator)
                 .environmentObject(model)
                 .environmentObject(model.store)
                 .environmentObject(model.settings)
@@ -70,7 +83,7 @@ final class ClipboardPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        guard !isHiding, panel.isVisible else { return }
+        guard !isHiding, !dragCoordinator.isDragging, panel.isVisible else { return }
         model.hidePanel()
     }
 
@@ -93,6 +106,7 @@ final class ClipboardPanelController: NSObject, NSWindowDelegate {
 
     private func installEventMonitor() {
         removeEventMonitor()
+        dragCoordinator.installMonitor(on: panel)
         keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             guard let self, self.panel.isVisible else { return event }
             return self.handle(event) ? nil : event
@@ -101,13 +115,14 @@ final class ClipboardPanelController: NSObject, NSWindowDelegate {
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]
         ) { [weak self] _ in
             DispatchQueue.main.async {
-                guard let self, self.panel.isVisible else { return }
+                guard let self, self.panel.isVisible, !self.dragCoordinator.isDragging else { return }
                 self.model.hidePanel()
             }
         }
     }
 
     private func removeEventMonitor() {
+        dragCoordinator.removeMonitor()
         if let keyEventMonitor { NSEvent.removeMonitor(keyEventMonitor) }
         if let outsideClickMonitor { NSEvent.removeMonitor(outsideClickMonitor) }
         keyEventMonitor = nil
