@@ -271,7 +271,7 @@ enum MarkdownDetector {
         pattern: "(?<!\\*)\\*\\*(?!\\s|\\*)([^\\n*]+?)(?<!\\s)\\*\\*(?!\\*)"
     )
     private static let underscoreBoldRegex = try! NSRegularExpression(
-        pattern: "(?<![\\w_])__(?!\\s|_)([^\\n_]+?)(?<!\\s)__(?![\\w_])"
+        pattern: "(?<![\\w_])__(?!\\s|_)(?![A-Za-z0-9]+__)([^\\n_]+?)(?<!\\s)__(?![\\w_])"
     )
     private static let strikethroughRegex = try! NSRegularExpression(
         pattern: "(?<!~)~~(?!\\s|~)([^\\n~]+?)(?<!\\s)~~(?!~)"
