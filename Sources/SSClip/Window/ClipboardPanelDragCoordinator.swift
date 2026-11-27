@@ -87,8 +87,8 @@ final class ClipboardPanelDragCoordinator {
     private var mouseDownPointInWindow: NSPoint?
     private var activeDragSource: ActiveDragSource?
 
-    init(exporter: ClipboardFileExporter = ClipboardFileExporter()) {
-        self.exporter = exporter
+    init(exporter: ClipboardFileExporter? = nil) {
+        self.exporter = exporter ?? ClipboardFileExporter()
     }
 
     func register(_ anchor: DragAnchorNSView) {
