@@ -6,6 +6,7 @@ struct ClipboardPanelView: View {
     @EnvironmentObject private var store: ClipboardStore
     @EnvironmentObject private var settings: AppSettings
     @FocusState private var searchFocused: Bool
+    var dragCoordinator: ClipboardPanelDragCoordinator? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -139,6 +140,7 @@ struct ClipboardPanelView: View {
                         isSelected: index == model.selectedIndex,
                         folderName: store.folders.first(where: { $0.id == item.folderID })?.name,
                         imagesDirectory: store.imagesDirectory,
+                        dragCoordinator: dragCoordinator,
                         showsBatchControls: model.isBatchMode,
                         batchPosition: model.batchPosition(of: item),
                         onSelect: {
@@ -320,6 +322,7 @@ private struct ClipboardRow: View {
     let isSelected: Bool
     let folderName: String?
     let imagesDirectory: URL
+    let dragCoordinator: ClipboardPanelDragCoordinator?
     let showsBatchControls: Bool
     let batchPosition: Int?
     let onSelect: () -> Void
@@ -387,44 +390,54 @@ private struct ClipboardRow: View {
                 )
             }
 
-            Text(number)
-                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                .foregroundStyle(numberText)
-                .frame(width: 20, height: 20)
-                .background(numberFill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+            HStack(spacing: 9) {
+                Text(number)
+                    .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(numberText)
+                    .frame(width: 20, height: 20)
+                    .background(numberFill, in: RoundedRectangle(cornerRadius: 5, style: .continuous))
 
-            RowLeadingIcon(item: item, imagesDirectory: imagesDirectory, badgeFill: badgeFill)
+                RowLeadingIcon(item: item, imagesDirectory: imagesDirectory, badgeFill: badgeFill)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(item.title)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(.primary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(item.title)
+                        .font(.system(size: 12.5, weight: .medium))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    HStack(spacing: 6) {
+                        Text(item.detail)
+                        Text(item.createdAt.formatted(date: .abbreviated, time: .shortened))
+                        if let sourceAppName = item.sourceAppName {
+                            Text(sourceAppName)
+                        }
+                        if let folderName {
+                            Label(folderName, systemImage: "folder.fill")
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(
+                                    Color(
+                                        light: .white.opacity(isSelected ? 0.55 : 0.50),
+                                        dark: .white.opacity(isSelected ? 0.12 : 0.08)
+                                    ),
+                                    in: Capsule()
+                                )
+                        }
+                    }
+                    .font(.system(size: 10))
+                    .foregroundStyle(metadataColor)
                     .lineLimit(1)
-                HStack(spacing: 6) {
-                    Text(item.detail)
-                    Text(item.createdAt.formatted(date: .abbreviated, time: .shortened))
-                    if let sourceAppName = item.sourceAppName {
-                        Text(sourceAppName)
-                    }
-                    if let folderName {
-                        Label(folderName, systemImage: "folder.fill")
-                            .padding(.horizontal, 5)
-                            .padding(.vertical, 1)
-                            .background(
-                                Color(
-                                    light: .white.opacity(isSelected ? 0.55 : 0.50),
-                                    dark: .white.opacity(isSelected ? 0.12 : 0.08)
-                                ),
-                                in: Capsule()
-                            )
-                    }
                 }
-                .font(.system(size: 10))
-                .foregroundStyle(metadataColor)
-                .lineLimit(1)
-            }
 
-            Spacer(minLength: 8)
+                Spacer(minLength: 8)
+            }
+            .contentShape(Rectangle())
+            .background {
+                DragAnchorView(
+                    item: item,
+                    imagesDirectory: imagesDirectory,
+                    coordinator: dragCoordinator
+                )
+            }
 
             Button(action: onFavorite) {
                 Image(systemName: item.isFavorite ? "star.fill" : "star")
@@ -477,7 +490,7 @@ private struct ClipboardRow: View {
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel("第 \(number) 条，\(item.kind.localizedName)，\(item.title)")
-        .accessibilityHint("按数字 \(number) 直接粘贴，空格预览")
+        .accessibilityHint("按数字 \(number) 直接粘贴，空格预览，拖出可作为文件传递")
     }
 }
 

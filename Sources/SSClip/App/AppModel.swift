@@ -585,6 +585,15 @@ final class AppModel: ObservableObject {
         )
     }
 
+    func cancelPreviewForDrag() {
+        previewTask?.cancel()
+        previewController?.hide()
+    }
+
+    func notifyDragExportFailed() {
+        showMessage("无法读取该记录，内容可能已丢失")
+    }
+
     func normalizeNavigation() {
         currentPage = min(max(0, currentPage), pageCount - 1)
         selectedIndex = min(max(0, selectedIndex), max(0, pageItems.count - 1))
